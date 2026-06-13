@@ -15,6 +15,19 @@ _TRANSLATABLE_ANTHROPIC_PARAMS: frozenset = frozenset(
     ]
 )
 
+# Anthropic 専用キーのセット（OpenAI 上流へ転送してはならないパラメーター）。
+# _copy_untranslated_anthropic_params でこれらのキーを除外するために使用する。
+_ANTHROPIC_ONLY_PARAMS: frozenset = frozenset(
+    [
+        "mcp_servers",
+        "container",
+        "inference_geo",
+        "speed",
+        "context_management",
+        "cache_control",
+    ]
+)
+
 # OpenAI は function/tool 名を64文字に制限している
 # Anthropic にはこの制限がないため、長い名前を切り詰める必要がある
 OPENAI_MAX_TOOL_NAME_LENGTH = 64

@@ -709,3 +709,32 @@ def test_sync_streaming_wrapper_is_async_false():
     it = A.translate_completion_output_params_streaming(gen(), model="m", is_async=False)
     body = b"".join(c if isinstance(c, bytes) else c.encode() for c in it).decode()
     assert "message_start" in body and "message_stop" in body
+
+
+# ===========================================================================
+# H-2: Anthropic専用キーのblocklist除外（security fix）
+# ===========================================================================
+
+def test_blocklist_keys_not_forwarded_to_openai():
+    """blocklist キー（mcp_servers, container等）が OpenAI 上流へ転送されないことを確認する（H-2）。"""
+    req, _ = _in(
+        mcp_servers=[{"type": "url", "url": "https://example.com/mcp"}],
+        container={"image": "ghcr.io/example/container:latest"},
+        inference_geo="us",
+        speed="fast",
+    )
+    for key in ("mcp_servers", "container", "inference_geo", "speed"):
+        assert key not in req, f"blocklist key '{key}' was unexpectedly forwarded to OpenAI upstream"
+
+
+def test_blocklist_cache_control_top_level_not_forwarded():
+    """トップレベル cache_control（Anthropic専用）が OpenAI 上流へ転送されないことを確認する（H-2）。"""
+    req, _ = _in(cache_control={"type": "ephemeral"})
+    assert "cache_control" not in req, "top-level cache_control was unexpectedly forwarded"
+
+
+def test_standard_params_still_forwarded():
+    """標準パラメーター（temperature, top_p）が従来通り透過されることを確認する（既存挙動維持）。"""
+    req, _ = _in(temperature=0.7, top_p=0.9)
+    assert req["temperature"] == 0.7
+    assert req["top_p"] == 0.9

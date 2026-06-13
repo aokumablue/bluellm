@@ -522,10 +522,15 @@ class _RequestMessageMixin:
         anthropic_message_request: AnthropicMessagesRequest,
         new_kwargs: ChatCompletionRequest,
     ) -> None:
-        """変換不要な Anthropic パラメーターをそのままコピーする。"""
+        """変換不要な Anthropic パラメーターをそのままコピーする。
+
+        translatable_anthropic_params に含まれるキー（変換対象）と
+        anthropic_only_params に含まれるキー（Anthropic 専用・OpenAI 非対応）は除外する。
+        """
         translatable_params = self.translatable_anthropic_params()
+        anthropic_only = self.anthropic_only_params()
         for k, v in anthropic_message_request.items():
-            if k not in translatable_params:  # 残りのパラメーターはそのまま渡す
+            if k not in translatable_params and k not in anthropic_only:
                 new_kwargs[k] = v  # type: ignore
 
     def translate_anthropic_to_openai(

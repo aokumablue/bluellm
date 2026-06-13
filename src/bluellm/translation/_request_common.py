@@ -7,6 +7,7 @@ from typing import (
 
 from bluellm.translation._errors import UnsupportedContentError
 from bluellm.translation._tools import (
+    _ANTHROPIC_ONLY_PARAMS,
     _TRANSLATABLE_ANTHROPIC_PARAMS,
 )
 
@@ -87,6 +88,10 @@ class _RequestCommonMixin:
     def translatable_anthropic_params(self) -> frozenset:
         """OpenAI 形式に変換が必要な Anthropic パラメーターの一覧。"""
         return _TRANSLATABLE_ANTHROPIC_PARAMS
+
+    def anthropic_only_params(self) -> frozenset:
+        """OpenAI 上流へ転送してはならない Anthropic 専用パラメーターの一覧。"""
+        return _ANTHROPIC_ONLY_PARAMS
 
     @staticmethod
     def is_anthropic_claude_model(model: str) -> bool:
