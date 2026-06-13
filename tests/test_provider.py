@@ -191,6 +191,70 @@ def test_stop_sequences_wrong_type_is_dropped(provider):
     assert out.get("stop") is None
 
 
+_SENTINEL = object()
+
+
+@pytest.mark.parametrize(
+    "input_kwargs, expected_stop",
+    [
+        # stop_sequences 無し: stop は触らない
+        ({}, _SENTINEL),
+        # stop_sequences が list[str]: stop に昇格
+        ({"stop_sequences": ["X"]}, ["X"]),
+        # stop_sequences が不正値: stop も落とす
+        ({"stop_sequences": "bad"}, _SENTINEL),
+        ({"stop_sequences": [1, 2]}, _SENTINEL),
+        # 直接 stop（第2ブロックのみが検証する経路）
+        ({"stop": ["S"]}, ["S"]),
+        ({"stop": "BREAK"}, _SENTINEL),
+        # 組合せ: 既存 stop を優先（setdefault）
+        ({"stop_sequences": ["A"], "stop": ["B"]}, ["B"]),
+        # 組合せ: 不正 stop_sequences は直接 stop も落とす
+        ({"stop_sequences": "bad", "stop": ["B"]}, _SENTINEL),
+        # 組合せ: 有効 stop_sequences + 不正 stop（setdefault 不発、第2ブロックで落ちる）
+        ({"stop_sequences": ["A"], "stop": "bad"}, _SENTINEL),
+    ],
+)
+def test_normalize_stop_param_matches_inline_logic(input_kwargs, expected_stop):
+    """抽出した `_normalize_stop_param` が抽出前のインラインロジックと完全一致することを証明する。
+
+    各入力に対して reference 実装（抽出前のコードをそのまま再現）と
+    `_normalize_stop_param` の結果（`stop` の有無・値、および `stop_sequences` 除去）が
+    バイト一致することを確認する。
+    """
+    from bluellm.providers.openai_like import _normalize_stop_param
+
+    def reference(req):
+        stop_sequences = req.pop("stop_sequences", None)
+        if stop_sequences is not None:
+            if isinstance(stop_sequences, list) and all(
+                isinstance(x, str) for x in stop_sequences
+            ):
+                req.setdefault("stop", stop_sequences)
+            else:
+                req.pop("stop", None)
+        stop = req.get("stop")
+        if stop is not None:
+            if isinstance(stop, list) and all(isinstance(x, str) for x in stop):
+                pass
+            else:
+                req.pop("stop", None)
+
+    base = {"model": "m", "messages": [{"role": "user", "content": "hi"}]}
+
+    ref_req = {**base, **input_kwargs}
+    reference(ref_req)
+
+    new_req = {**base, **input_kwargs}
+    _normalize_stop_param(new_req)
+
+    # 抽出前後で req 全体がバイト一致
+    assert new_req == ref_req
+    # 期待値に対する明示的な pin
+    assert new_req.get("stop", _SENTINEL) == expected_stop
+    assert "stop_sequences" not in new_req
+
+
 def test_top_k_dropped(provider):
     # H2: Anthropic `top_k` has no Chat Completions equivalent. Drop it in
     # _prepare so the upstream does not 400 and we avoid the auto-drop retry

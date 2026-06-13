@@ -32,6 +32,44 @@ _NON_OPENAI_MESSAGE_KEYS = (
 )
 
 
+def _normalize_stop_param(req: Dict[str, Any]) -> None:
+    """``stop_sequences`` / ``stop`` を OpenAI/Azure 形式の ``stop`` に正規化する（in-place）。
+
+    Anthropic の ``stop_sequences`` は Chat Completions では ``stop`` という名前であり、
+    Azure/OpenAI は ``stop`` に ``list[str]`` を期待する。上流が string / list[non-str] /
+    dict などの型ゆらぎを送ってくるため、``req`` を以下の2段で正規化する:
+
+    1. ``stop_sequences`` が存在する場合に処理する。``list[str]`` なら ``stop`` を
+       ``setdefault`` する（上流が既に ``stop`` を指定済みならそれを優先）。不正値なら
+       ``stop`` も削除する。``stop_sequences`` 自体は常に ``req`` から取り除く。
+       ``stop_sequences`` が無い場合は ``stop`` をそのまま維持する。
+    2. （第1段の結果に加え、リクエストへ直接来た ``stop`` も含めて）``req["stop"]`` を
+       再検証し、``list[str]`` でなければ削除する。
+
+    どちらの段も独立に意味を持つ（``stop_sequences`` 経由と直接 ``stop`` 経由の双方を
+    カバーする）ため両方を保持する。
+    """
+    stop_sequences = req.pop("stop_sequences", None)
+    if stop_sequences is not None:
+        if isinstance(stop_sequences, list) and all(isinstance(x, str) for x in stop_sequences):
+            # 上流（Claude互換クライアント）が `stop` トップレベルを既に指定している場合
+            # は上書きしない（＝既存値を優先）
+            req.setdefault("stop", stop_sequences)
+        else:
+            # `stop_sequences` が不正（list[str] ではない）場合は `stop` も落とす
+            req.pop("stop", None)
+    # stop_sequences が無い場合は `stop` を維持する（上流が正しい `stop` を指定している
+    # 可能性を残す）。
+
+    stop = req.get("stop")
+    if stop is not None:
+        # OpenAI/Azure は `stop` に list[str] を期待
+        if isinstance(stop, list) and all(isinstance(x, str) for x in stop):
+            pass
+        else:
+            req.pop("stop", None)
+
+
 def _strip_cache_control(obj: Any) -> Any:
     """dict/list ツリーから Anthropic の ``cache_control`` キーを再帰的に削除する。
 
@@ -97,25 +135,7 @@ class OpenAILikeProvider(BaseProvider):
         # Anthropic の `stop_sequences` は Chat Completions では `stop` という名前。
         # Azure/OpenAI は `stop` に list[str] を期待するため、上流の型ゆらぎ
         # （string / list[non-str] / dict など）を正規化する。
-        stop_sequences = req.pop("stop_sequences", None)
-        if stop_sequences is not None:
-            if isinstance(stop_sequences, list) and all(isinstance(x, str) for x in stop_sequences):
-                # 上流（Claude互換クライアント）が `stop` トップレベルを既に指定している場合
-                # は上書きしない（＝既存値を優先）
-                req.setdefault("stop", stop_sequences)
-            else:
-                # `stop_sequences` が不正（list[str] ではない）場合は `stop` も落とす
-                req.pop("stop", None)
-        # stop_sequences が無い場合は `stop` を維持する（上流が正しい `stop` を指定している
-        # 可能性を残す）。
-
-        stop = req.get("stop")
-        if stop is not None:
-            # OpenAI/Azure は `stop` に list[str] を期待
-            if isinstance(stop, list) and all(isinstance(x, str) for x in stop):
-                pass
-            else:
-                req.pop("stop", None)
+        _normalize_stop_param(req)
 
         # Anthropic の `top_k` は Chat Completions に相当するものがないため事前に削除する。
         # こうしないと、acreate の自動削除リトライが1往復かけて復旧することになる。
