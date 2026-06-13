@@ -6,12 +6,10 @@ from bluellm.translation._request_thinking import _RequestThinkingMixin
 from bluellm.translation._request_tools import _RequestToolsMixin
 from bluellm.translation._response import _ResponseMixin
 from bluellm.translation._streaming_translation import _StreamingTranslationMixin
-from bluellm.translation._tools import truncate_tool_name
 
 __all__ = [
     "BlueLLMMessagesAdapter",
     "UnsupportedContentError",
-    "truncate_tool_name",
 ]
 
 
