@@ -64,12 +64,13 @@ class ModelConfig:
 
 @dataclass
 class GeneralSettings:
-    """サーバー全体の設定: 認証 master key、暗号化 salt key、host、port。"""
+    """サーバー全体の設定: 認証 master key、暗号化 salt key、host、port、リクエストボディ上限。"""
 
     master_key: Optional[str] = None
     salt_key: Optional[str] = None
     host: str = "127.0.0.1"
     port: int = 4000
+    max_request_body_mb: int = 10
 
 
 @dataclass
@@ -207,6 +208,7 @@ def load_config(path: str) -> Config:
         salt_key=salt_key,
         host=gs_raw.get("host", "127.0.0.1"),
         port=int(gs_raw.get("port", 4000)),
+        max_request_body_mb=int(gs_raw.get("max_request_body_mb", 10)),
     )
 
     model_list: List[ModelConfig] = []

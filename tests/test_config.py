@@ -170,3 +170,22 @@ def test_endpoint_must_use_http_scheme(tmp_path, monkeypatch):
     p.write_text(bad)
     with pytest.raises(ValueError):
         load_config(str(p))
+
+
+def test_max_request_body_mb_default(tmp_path, monkeypatch):
+    # M-4: generals.max_request_body_mb defaults to 10 when not specified in YAML.
+    monkeypatch.setenv("AZURE_API_KEY", AZURE_KEY)
+    monkeypatch.setenv("BLUELLM_MASTER_KEY", MASTER_KEY)
+    cfg = load_config(_write(tmp_path, "os.environ/AZURE_API_KEY"))
+    assert cfg.general_settings.max_request_body_mb == 10
+
+
+def test_max_request_body_mb_custom(tmp_path, monkeypatch):
+    # M-4: generals.max_request_body_mb is resolved from YAML when specified.
+    monkeypatch.setenv("AZURE_API_KEY", AZURE_KEY)
+    monkeypatch.setenv("BLUELLM_MASTER_KEY", MASTER_KEY)
+    custom = SCHEMA.rstrip() + "\n  max_request_body_mb: 5\n"
+    p = tmp_path / "config.yml"
+    p.write_text(custom.format(key="os.environ/AZURE_API_KEY"))
+    cfg = load_config(str(p))
+    assert cfg.general_settings.max_request_body_mb == 5

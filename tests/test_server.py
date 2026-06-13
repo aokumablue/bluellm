@@ -308,6 +308,31 @@ def test_unsupported_content_400_body_is_client_facing_only(make_client):
     assert "Traceback" not in body["error"]["message"]
 
 
+def test_large_body_returns_413(make_client):
+    # M-4: Content-Length exceeding max_request_body_mb (default 10 MB) returns 413.
+    client = make_client(lambda **kw: None)
+    oversized = 11 * 1024 * 1024  # 11 MB > default 10 MB
+    r = client.post(
+        "/v1/messages",
+        headers={**AUTH, "content-length": str(oversized)},
+        content=b"x",
+    )
+    assert r.status_code == 413
+    body = r.json()
+    assert body["type"] == "error"
+    assert body["error"]["type"] == "invalid_request_error"
+
+
+def test_body_within_limit_passes_through(make_client):
+    # M-4: Content-Length within the limit allows normal processing.
+    async def create(**kw):
+        return text_completion()
+
+    client = make_client(create)
+    r = client.post("/v1/messages", headers={**AUTH, "content-length": "100"}, json=MSG)
+    assert r.status_code == 200
+
+
 def test_badrequest_debug_log_omits_raw_body(make_client, caplog):
     # S3: the provider's BadRequestError debug log must carry type/param/code, not
     # the raw str(e) body, which can contain dynamic secrets absent from the

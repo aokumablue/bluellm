@@ -37,6 +37,20 @@ def create_app(config: Config) -> FastAPI:
     app.state.router = Router(config)
     app.state.authenticator = Authenticator(config.general_settings.master_key)
 
+    max_bytes = config.general_settings.max_request_body_mb * 1024 * 1024
+
+    @app.middleware("http")
+    async def _limit_body_size(request: Request, call_next):
+        """Content-Length が設定上限（max_request_body_mb）を超えるリクエストを 413 で拒否する（M-4 DoS 対策）。
+
+        Content-Length ヘッダーが存在し数値の場合のみチェックする。
+        ヘッダーが欠落している場合は通過させる（既存挙動と同じ、悪化なし）。
+        """
+        cl = request.headers.get("content-length")
+        if cl is not None and cl.isdigit() and int(cl) > max_bytes:
+            return _anthropic_error(413, "invalid_request_error", "request body too large")
+        return await call_next(request)
+
     @app.get("/health")
     async def health():
         """認証不要の死活監視プローブ。"""
