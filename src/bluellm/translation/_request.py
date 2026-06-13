@@ -1,7 +1,6 @@
 import copy
 import json
 from typing import (
-    TYPE_CHECKING,
     Any,
     Dict,
     List,
@@ -49,9 +48,6 @@ from bluellm.types.openai import (
     ChatCompletionToolParamFunctionChunk,
     ChatCompletionUserMessage,
 )
-
-if TYPE_CHECKING:
-    from bluellm.translation import BlueLLMMessagesAdapter
 
 
 class _RequestMixin:
@@ -636,7 +632,7 @@ class _RequestMixin:
         thinking が effort にマッピングされない場合は ``None`` を返す。
         """
         reasoning_effort = (
-            BlueLLMMessagesAdapter.translate_anthropic_thinking_to_reasoning_effort(
+            _RequestMixin.translate_anthropic_thinking_to_reasoning_effort(
                 thinking
             )
         )
@@ -807,11 +803,11 @@ class _RequestMixin:
             schema["additionalProperties"] = False
             schema["required"] = list(schema["properties"].keys())
             for prop in schema["properties"].values():
-                BlueLLMMessagesAdapter._add_additional_properties_false(prop)
+                _RequestMixin._add_additional_properties_false(prop)
 
         # array の items を処理する
         if "items" in schema:
-            BlueLLMMessagesAdapter._add_additional_properties_false(
+            _RequestMixin._add_additional_properties_false(
                 schema["items"]
             )
 
@@ -819,7 +815,7 @@ class _RequestMixin:
         for key in ("anyOf", "oneOf", "allOf"):
             if key in schema:
                 for sub_schema in schema[key]:
-                    BlueLLMMessagesAdapter._add_additional_properties_false(
+                    _RequestMixin._add_additional_properties_false(
                         sub_schema
                     )
 
@@ -827,7 +823,7 @@ class _RequestMixin:
         for key in ("$defs", "definitions"):
             if key in schema:
                 for def_schema in schema[key].values():
-                    BlueLLMMessagesAdapter._add_additional_properties_false(
+                    _RequestMixin._add_additional_properties_false(
                         def_schema
                     )
 
