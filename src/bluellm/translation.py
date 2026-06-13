@@ -17,6 +17,21 @@ from typing import (
 
 from bluellm._compat import is_reasoning_auto_summary_enabled
 
+# OpenAI 形式に変換が必要な Anthropic リクエストパラメーターのセット。
+# _copy_untranslated_anthropic_params でこれ以外のキーをそのまま転送するために使用する。
+_TRANSLATABLE_ANTHROPIC_PARAMS: frozenset = frozenset(
+    [
+        "messages",
+        "metadata",
+        "system",
+        "tool_choice",
+        "tools",
+        "thinking",
+        "output_format",
+        "output_config",
+    ]
+)
+
 # OpenAI は function/tool 名を64文字に制限している
 # Anthropic にはこの制限がないため、長い名前を切り詰める必要がある
 OPENAI_MAX_TOOL_NAME_LENGTH = 64
@@ -320,20 +335,9 @@ class BlueLLMMessagesAdapter:
             else:  # pragma: no cover - 防御的コード。すべての呼び出し元は dict の target を渡す
                 cast(Dict[str, Any], target)["cache_control"] = cache_control
 
-    def translatable_anthropic_params(self) -> List:
-        """
-        OpenAI 形式に変換が必要な Anthropic パラメーターの一覧。
-        """
-        return [
-            "messages",
-            "metadata",
-            "system",
-            "tool_choice",
-            "tools",
-            "thinking",
-            "output_format",
-            "output_config",
-        ]
+    def translatable_anthropic_params(self) -> frozenset:
+        """OpenAI 形式に変換が必要な Anthropic パラメーターの一覧。"""
+        return _TRANSLATABLE_ANTHROPIC_PARAMS
 
     def _is_web_search_tool(self, tool: Dict[str, Any]) -> bool:
         """
