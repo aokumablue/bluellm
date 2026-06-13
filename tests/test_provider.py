@@ -213,6 +213,12 @@ _SENTINEL = object()
         ({"stop_sequences": "bad", "stop": ["B"]}, _SENTINEL),
         # 組合せ: 有効 stop_sequences + 不正 stop（setdefault 不発、第2ブロックで落ちる）
         ({"stop_sequences": ["A"], "stop": "bad"}, _SENTINEL),
+        # M-1: 空 stop_sequences → 指定なし扱い（stop 設定なし）
+        ({"stop_sequences": []}, _SENTINEL),
+        # M-1: 空 stop → 削除
+        ({"stop": []}, _SENTINEL),
+        # M-1: 空 stop_sequences は指定なし扱い、直接 stop は維持
+        ({"stop_sequences": [], "stop": ["S"]}, ["S"]),
     ],
 )
 def test_normalize_stop_param_matches_inline_logic(input_kwargs, expected_stop):
@@ -226,7 +232,7 @@ def test_normalize_stop_param_matches_inline_logic(input_kwargs, expected_stop):
 
     def reference(req):
         stop_sequences = req.pop("stop_sequences", None)
-        if stop_sequences is not None:
+        if stop_sequences:
             if isinstance(stop_sequences, list) and all(
                 isinstance(x, str) for x in stop_sequences
             ):
@@ -235,7 +241,7 @@ def test_normalize_stop_param_matches_inline_logic(input_kwargs, expected_stop):
                 req.pop("stop", None)
         stop = req.get("stop")
         if stop is not None:
-            if isinstance(stop, list) and all(isinstance(x, str) for x in stop):
+            if isinstance(stop, list) and stop and all(isinstance(x, str) for x in stop):
                 pass
             else:
                 req.pop("stop", None)

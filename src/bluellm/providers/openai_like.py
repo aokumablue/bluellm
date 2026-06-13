@@ -39,18 +39,18 @@ def _normalize_stop_param(req: Dict[str, Any]) -> None:
     Azure/OpenAI は ``stop`` に ``list[str]`` を期待する。上流が string / list[non-str] /
     dict などの型ゆらぎを送ってくるため、``req`` を以下の2段で正規化する:
 
-    1. ``stop_sequences`` が存在する場合に処理する。``list[str]`` なら ``stop`` を
+    1. ``stop_sequences`` が存在し、かつ非空の場合に処理する。``list[str]`` なら ``stop`` を
        ``setdefault`` する（上流が既に ``stop`` を指定済みならそれを優先）。不正値なら
        ``stop`` も削除する。``stop_sequences`` 自体は常に ``req`` から取り除く。
-       ``stop_sequences`` が無い場合は ``stop`` をそのまま維持する。
+       ``stop_sequences`` が無い場合・空リストの場合は「指定なし」として ``stop`` をそのまま維持する。
     2. （第1段の結果に加え、リクエストへ直接来た ``stop`` も含めて）``req["stop"]`` を
-       再検証し、``list[str]`` でなければ削除する。
+       再検証し、``list[str]`` かつ非空でなければ削除する。空リストも「指定なし扱い」として削除する。
 
     どちらの段も独立に意味を持つ（``stop_sequences`` 経由と直接 ``stop`` 経由の双方を
     カバーする）ため両方を保持する。
     """
     stop_sequences = req.pop("stop_sequences", None)
-    if stop_sequences is not None:
+    if stop_sequences:
         if isinstance(stop_sequences, list) and all(isinstance(x, str) for x in stop_sequences):
             # 上流（Claude互換クライアント）が `stop` トップレベルを既に指定している場合
             # は上書きしない（＝既存値を優先）
@@ -58,13 +58,13 @@ def _normalize_stop_param(req: Dict[str, Any]) -> None:
         else:
             # `stop_sequences` が不正（list[str] ではない）場合は `stop` も落とす
             req.pop("stop", None)
-    # stop_sequences が無い場合は `stop` を維持する（上流が正しい `stop` を指定している
-    # 可能性を残す）。
+    # stop_sequences が無い場合・空リストの場合は `stop` を維持する（上流が正しい `stop` を
+    # 指定している可能性を残す）。
 
     stop = req.get("stop")
     if stop is not None:
-        # OpenAI/Azure は `stop` に list[str] を期待
-        if isinstance(stop, list) and all(isinstance(x, str) for x in stop):
+        # OpenAI/Azure は `stop` に list[str] を期待。空リストは「指定なし扱い」として削除する。
+        if isinstance(stop, list) and stop and all(isinstance(x, str) for x in stop):
             pass
         else:
             req.pop("stop", None)
