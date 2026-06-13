@@ -3,7 +3,7 @@
 import pytest
 from helpers import stream_chunk
 
-from bluellm.translation import BlueLLMMessagesAdapter, BlueLLMMessagesAdapter
+from bluellm.translation import BlueLLMMessagesAdapter
 
 A = BlueLLMMessagesAdapter()
 M = BlueLLMMessagesAdapter()
