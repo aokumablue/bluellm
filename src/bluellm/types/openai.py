@@ -311,17 +311,6 @@ class GenericChatCompletionMessage(TypedDict, total=False):
     content: Required[Union[str, List]]
 
 
-ValidUserMessageContentTypes = [
-    "text",
-    "image_url",
-    "input_audio",
-    "audio_url",
-    "document",
-    "guarded_text",
-    "video_url",
-    "file",
-]  # ユーザーメッセージのバリデーション用。Anthropic メッセージの誤送信を防ぐ。
-
 ValidUserMessageContentTypesLiteral = Literal[
     "text",
     "image_url",
@@ -341,28 +330,8 @@ ValidAssistantMessageContentTypesLiteral = Literal[
     "image_url",
 ]
 
-ValidAssistantMessageContentTypes = [
-    "text",
-    "thinking",
-    "redacted_thinking",
-    "image_url",
-]
-
 # チャット補完メッセージの有効なコンテンツタイプの結合
 ValidChatCompletionMessageContentTypesLiteral = Literal[
-    "text",
-    "image_url",
-    "input_audio",
-    "audio_url",
-    "document",
-    "guarded_text",
-    "video_url",
-    "file",
-    "thinking",
-    "redacted_thinking",
-]
-
-ValidChatCompletionMessageContentTypes = [
     "text",
     "image_url",
     "input_audio",

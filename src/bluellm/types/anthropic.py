@@ -8,7 +8,6 @@ from .openai import (
     ChatCompletionCachedContent,
     ChatCompletionRedactedThinkingBlock,
     ChatCompletionThinkingBlock,
-    ChatCompletionUsageBlock,
 )
 
 
@@ -126,9 +125,6 @@ class AnthropicToolSearchToolBM25(TypedDict, total=False):
     defer_loading: Optional[bool]
     allowed_callers: Optional[List[str]]
     input_examples: Optional[List[Dict[str, Any]]]
-
-
-ANTHROPIC_ADVISOR_TOOL_TYPE: Literal["advisor_20260301"] = "advisor_20260301"
 
 
 class AnthropicAdvisorTool(TypedDict, total=False):
@@ -628,21 +624,6 @@ AnthropicFinishReason = Literal[
 ]
 
 
-class AnthropicChatCompletionUsageBlock(ChatCompletionUsageBlock, total=False):
-    cache_creation_input_tokens: int
-    cache_read_input_tokens: int
-
-
-ANTHROPIC_API_HEADERS = {
-    "anthropic-version",
-    "anthropic-beta",
-}
-
-ANTHROPIC_API_ONLY_HEADERS = {  # Vertex AIやBedrockでAnthropicを呼び出す場合は失敗する
-    "anthropic-beta",
-}
-
-
 class AnthropicThinkingParam(TypedDict, total=False):
     type: Literal["enabled", "adaptive"]
     budget_tokens: int
@@ -656,21 +637,6 @@ class ANTHROPIC_HOSTED_TOOLS(str, Enum):
     WEB_FETCH = "web_fetch"
     MEMORY = "memory"
     TOOL_SEARCH_TOOL = "tool_search_tool"
-
-
-class ANTHROPIC_BETA_HEADER_VALUES(str, Enum):
-    """
-    Anthropicの既知のbetaヘッダー値。
-    """
-
-    WEB_FETCH_2025_09_10 = "web-fetch-2025-09-10"
-    WEB_SEARCH_2025_03_05 = "web-search-2025-03-05"
-    CONTEXT_MANAGEMENT_2025_06_27 = "context-management-2025-06-27"
-    COMPACT_2026_01_12 = "compact-2026-01-12"
-    STRUCTURED_OUTPUT_2025_09_25 = "structured-outputs-2025-11-13"
-    ADVANCED_TOOL_USE_2025_11_20 = "advanced-tool-use-2025-11-20"
-    FAST_MODE_2026_02_01 = "fast-mode-2026-02-01"
-    ADVISOR_TOOL_2026_03_01 = "advisor-tool-2026-03-01"
 
 
 
