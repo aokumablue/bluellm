@@ -13,7 +13,7 @@ from bluellm import handler
 from bluellm.auth import Authenticator, require_auth
 from bluellm.config import Config
 from bluellm.router import Router
-from bluellm.translation import UnsupportedContentError
+from bluellm.translation._errors import UnsupportedContentError
 
 logger = logging.getLogger("bluellm")
 

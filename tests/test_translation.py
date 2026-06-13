@@ -6,10 +6,8 @@ from helpers import stream_chunk, text_completion, tool_call, usage, usage_only_
 
 from bluellm.providers.openai_like import OpenAILikeProvider
 from bluellm.streaming import BlueLLMStreamWrapper
-from bluellm.translation import (
-    BlueLLMMessagesAdapter,
-    UnsupportedContentError,
-)
+from bluellm.translation import BlueLLMMessagesAdapter
+from bluellm.translation._errors import UnsupportedContentError
 
 
 def test_input_translation_roles_tools_toolchoice():
