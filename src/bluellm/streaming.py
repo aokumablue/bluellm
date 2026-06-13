@@ -42,14 +42,14 @@ class BlueLLMStreamWrapper(AdapterCompletionStreamWrapper):
         TextBlock,
     )
 
-    sent_first_chunk: bool = False
-    sent_content_block_start: bool = False
-    sent_content_block_finish: bool = False
-    current_content_block_type: Literal["text", "tool_use", "thinking"] = "text"
-    sent_last_message: bool = False
-    holding_stop_reason_chunk: Optional[Any] = None
-    queued_usage_chunk: bool = False
-    current_content_block_index: int = 0
+    sent_first_chunk: bool
+    sent_content_block_start: bool
+    sent_content_block_finish: bool
+    current_content_block_type: Literal["text", "tool_use", "thinking"]
+    sent_last_message: bool
+    holding_stop_reason_chunk: Optional[Any]
+    queued_usage_chunk: bool
+    current_content_block_index: int
 
     def __init__(
         self,
@@ -67,6 +67,16 @@ class BlueLLMStreamWrapper(AdapterCompletionStreamWrapper):
         ポリフィルデータを発行イベントに付与する。
         """
         super().__init__(completion_stream)
+        self.sent_first_chunk: bool = False
+        self.sent_content_block_start: bool = False
+        self.sent_content_block_finish: bool = False
+        self.current_content_block_type: Literal["text", "tool_use", "thinking"] = (
+            "text"
+        )
+        self.sent_last_message: bool = False
+        self.holding_stop_reason_chunk: Optional[Any] = None
+        self.queued_usage_chunk: bool = False
+        self.current_content_block_index: int = 0
         self.model = model
         # 切り詰められた tool 名から元の名前へのマッピング（OpenAI の 64 文字制限対応）
         self.tool_name_mapping = tool_name_mapping or {}
