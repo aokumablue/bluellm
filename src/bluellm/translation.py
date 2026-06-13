@@ -493,43 +493,14 @@ class BlueLLMMessagesAdapter:
                     assistant_message_str = str(content)
                 elif isinstance(content, dict):
                     if content.get("type") == "text":
-                        text_block: Dict[str, Any] = {
-                            "type": "text",
-                            "text": content.get("text", ""),
-                        }
-                        self._add_cache_control_if_applicable(
-                            content, text_block, model
-                        )
-                        if "cache_control" in text_block:
+                        if self._collect_assistant_text_block(
+                            content, assistant_content_list, model
+                        ):
                             has_cache_control_in_text = True
-                        assistant_content_list.append(text_block)
                     elif content.get("type") == "tool_use":
-                        # OpenAI の64文字制限のため tool 名を切り詰める
-                        tool_name = truncate_tool_name(content.get("name", ""))
-                        function_chunk: ChatCompletionToolCallFunctionChunk = {
-                            "name": tool_name,
-                            "arguments": json.dumps(content.get("input", {})),
-                        }
-                        signature = self._extract_signature_from_tool_use_content(
-                            cast(Dict[str, Any], content)
+                        tool_calls.append(
+                            self._build_assistant_tool_call(content, model)
                         )
-
-                        if signature:
-                            provider_specific_fields: Dict[str, Any] = (
-                                function_chunk.get("provider_specific_fields") or {}
-                            )
-                            provider_specific_fields["thought_signature"] = signature
-                            function_chunk["provider_specific_fields"] = (
-                                provider_specific_fields
-                            )
-
-                        tool_call = ChatCompletionAssistantToolCall(
-                            id=content.get("id", ""),
-                            type="function",
-                            function=function_chunk,
-                        )
-                        self._add_cache_control_if_applicable(content, tool_call, model)
-                        tool_calls.append(tool_call)
                     elif content.get("type") == "thinking":
                         thinking_block = ChatCompletionThinkingBlock(
                             type="thinking",
@@ -552,16 +523,11 @@ class BlueLLMMessagesAdapter:
             or len(tool_calls) > 0
             or len(thinking_blocks) > 0
         ):
-            # テキストブロックに cache_control があればリスト形式、それ以外は文字列を使用する
-            if has_cache_control_in_text and len(assistant_content_list) > 0:
-                assistant_content: Any = assistant_content_list
-            elif len(assistant_content_list) > 0 and not has_cache_control_in_text:
-                # cache_control がない場合はテキストブロックを文字列に連結する
-                assistant_content = "".join(
-                    block.get("text", "") for block in assistant_content_list
-                )
-            else:
-                assistant_content = assistant_message_str
+            assistant_content = self._select_assistant_content(
+                assistant_message_str,
+                assistant_content_list,
+                has_cache_control_in_text,
+            )
 
             assistant_message = ChatCompletionAssistantMessage(
                 role="assistant",
@@ -573,6 +539,80 @@ class BlueLLMMessagesAdapter:
             if len(thinking_blocks) > 0:
                 assistant_message["thinking_blocks"] = thinking_blocks  # type: ignore
             new_messages.append(assistant_message)
+
+    def _collect_assistant_text_block(
+        self,
+        content: Dict[str, Any],
+        assistant_content_list: List[Dict[str, Any]],
+        model: Optional[str],
+    ) -> bool:
+        """Anthropic の text ブロックを content block へ変換し蓄積する。
+
+        cache_control を適用したうえで ``assistant_content_list`` に追加し、
+        cache_control が付与された場合に ``True`` を返す（呼び出し側で
+        ``has_cache_control_in_text`` の更新に使用する）。
+        """
+        text_block: Dict[str, Any] = {
+            "type": "text",
+            "text": content.get("text", ""),
+        }
+        self._add_cache_control_if_applicable(content, text_block, model)
+        assistant_content_list.append(text_block)
+        return "cache_control" in text_block
+
+    def _build_assistant_tool_call(
+        self,
+        content: Dict[str, Any],
+        model: Optional[str],
+    ) -> ChatCompletionAssistantToolCall:
+        """Anthropic の tool_use ブロックを OpenAI tool call へ変換する。
+
+        OpenAI の64文字制限のため tool 名を切り詰め、thought_signature を
+        provider_specific_fields に格納し、cache_control を適用する。
+        """
+        # OpenAI の64文字制限のため tool 名を切り詰める
+        tool_name = truncate_tool_name(content.get("name", ""))
+        function_chunk: ChatCompletionToolCallFunctionChunk = {
+            "name": tool_name,
+            "arguments": json.dumps(content.get("input", {})),
+        }
+        signature = self._extract_signature_from_tool_use_content(
+            cast(Dict[str, Any], content)
+        )
+
+        if signature:
+            provider_specific_fields: Dict[str, Any] = (
+                function_chunk.get("provider_specific_fields") or {}
+            )
+            provider_specific_fields["thought_signature"] = signature
+            function_chunk["provider_specific_fields"] = provider_specific_fields
+
+        tool_call = ChatCompletionAssistantToolCall(
+            id=content.get("id", ""),
+            type="function",
+            function=function_chunk,
+        )
+        self._add_cache_control_if_applicable(content, tool_call, model)
+        return tool_call
+
+    @staticmethod
+    def _select_assistant_content(
+        assistant_message_str: Optional[str],
+        assistant_content_list: List[Dict[str, Any]],
+        has_cache_control_in_text: bool,
+    ) -> Any:
+        """アシスタントメッセージの content 形式を選択する。
+
+        テキストブロックに cache_control があればリスト形式、cache_control が
+        なければテキストブロックを連結した文字列、それ以外は素の文字列を返す。
+        """
+        # テキストブロックに cache_control があればリスト形式、それ以外は文字列を使用する
+        if has_cache_control_in_text and len(assistant_content_list) > 0:
+            return assistant_content_list
+        if len(assistant_content_list) > 0 and not has_cache_control_in_text:
+            # cache_control がない場合はテキストブロックを文字列に連結する
+            return "".join(block.get("text", "") for block in assistant_content_list)
+        return assistant_message_str
 
     def _translate_tool_result(
         self,
