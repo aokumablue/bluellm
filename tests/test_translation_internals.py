@@ -3,9 +3,9 @@
 import pytest
 from helpers import stream_chunk
 
-from bluellm.translation import BlueLLMAdapter, BlueLLMMessagesAdapter
+from bluellm.translation import BlueLLMMessagesAdapter, BlueLLMMessagesAdapter
 
-A = BlueLLMAdapter()
+A = BlueLLMMessagesAdapter()
 M = BlueLLMMessagesAdapter()
 _MSGS = [{"role": "user", "content": "hi"}]
 

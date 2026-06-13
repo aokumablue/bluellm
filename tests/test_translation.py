@@ -7,7 +7,6 @@ from helpers import stream_chunk, text_completion, tool_call, usage, usage_only_
 from bluellm.providers.openai_like import OpenAILikeProvider
 from bluellm.streaming import BlueLLMStreamWrapper
 from bluellm.translation import (
-    BlueLLMAdapter,
     BlueLLMMessagesAdapter,
     UnsupportedContentError,
 )
@@ -37,7 +36,7 @@ def test_input_translation_roles_tools_toolchoice():
         ],
         "tool_choice": {"type": "auto"},
     }
-    req, mapping = BlueLLMAdapter().translate_completion_input_params_with_tool_mapping(
+    req, mapping = BlueLLMMessagesAdapter().translate_completion_input_params_with_tool_mapping(
         dict(body)
     )
     roles = [m["role"] for m in req["messages"]]
@@ -50,7 +49,7 @@ def test_input_translation_roles_tools_toolchoice():
 
 def test_output_tool_use_block():
     resp = text_completion(finish_reason="tool_calls", tool_calls=[tool_call()])
-    out = BlueLLMAdapter().translate_completion_output_params(
+    out = BlueLLMMessagesAdapter().translate_completion_output_params(
         response=resp, tool_name_mapping={}
     )
     assert out["stop_reason"] == "tool_use"
@@ -60,7 +59,7 @@ def test_output_tool_use_block():
 
 
 def test_output_text_and_usage():
-    out = BlueLLMAdapter().translate_completion_output_params(
+    out = BlueLLMMessagesAdapter().translate_completion_output_params(
         response=text_completion(text="hi"), tool_name_mapping={}
     )
     assert out["content"][0] == {"type": "text", "text": "hi"}
@@ -72,7 +71,7 @@ def test_content_filter_maps_to_refusal():
     # H1: Azure frequently stops on content_filter. Mapping it to end_turn made
     # Claude Code treat a filtered stop as a normal completion; it must map to
     # the Anthropic `refusal` stop_reason instead.
-    out = BlueLLMAdapter().translate_completion_output_params(
+    out = BlueLLMMessagesAdapter().translate_completion_output_params(
         response=text_completion(text="", finish_reason="content_filter"),
         tool_name_mapping={},
     )
@@ -101,7 +100,7 @@ def test_base64_image_still_translates():
             }
         ],
     }
-    req, _ = BlueLLMAdapter().translate_completion_input_params_with_tool_mapping(
+    req, _ = BlueLLMMessagesAdapter().translate_completion_input_params_with_tool_mapping(
         dict(body)
     )
     user_msg = next(m for m in req["messages"] if m["role"] == "user")
@@ -144,7 +143,7 @@ def test_tool_result_is_error_with_empty_content():
             }
         ],
     }
-    req, _ = BlueLLMAdapter().translate_completion_input_params_with_tool_mapping(
+    req, _ = BlueLLMMessagesAdapter().translate_completion_input_params_with_tool_mapping(
         dict(body)
     )
     tool_msg = next(m for m in req["messages"] if m["role"] == "tool")
@@ -172,7 +171,7 @@ def test_unsupported_image_source_raises_explicit_error():
         ],
     }
     with pytest.raises(UnsupportedContentError):
-        BlueLLMAdapter().translate_completion_input_params_with_tool_mapping(dict(body))
+        BlueLLMMessagesAdapter().translate_completion_input_params_with_tool_mapping(dict(body))
 
 
 def test_unsupported_document_source_raises_explicit_error():
@@ -193,7 +192,7 @@ def test_unsupported_document_source_raises_explicit_error():
         ],
     }
     with pytest.raises(UnsupportedContentError):
-        BlueLLMAdapter().translate_completion_input_params_with_tool_mapping(dict(body))
+        BlueLLMMessagesAdapter().translate_completion_input_params_with_tool_mapping(dict(body))
 
 
 def test_tool_result_without_is_error_is_unchanged():
@@ -210,7 +209,7 @@ def test_tool_result_without_is_error_is_unchanged():
             }
         ],
     }
-    req, _ = BlueLLMAdapter().translate_completion_input_params_with_tool_mapping(
+    req, _ = BlueLLMMessagesAdapter().translate_completion_input_params_with_tool_mapping(
         dict(body)
     )
     tool_msg = next(m for m in req["messages"] if m["role"] == "tool")
@@ -239,7 +238,7 @@ def test_tool_result_is_error_marks_string_content():
             }
         ],
     }
-    req, _ = BlueLLMAdapter().translate_completion_input_params_with_tool_mapping(
+    req, _ = BlueLLMMessagesAdapter().translate_completion_input_params_with_tool_mapping(
         dict(body)
     )
     tool_msg = next(m for m in req["messages"] if m["role"] == "tool")
@@ -269,7 +268,7 @@ def test_is_error_marker_scoped_to_its_own_tool_result():
             }
         ],
     }
-    req, _ = BlueLLMAdapter().translate_completion_input_params_with_tool_mapping(
+    req, _ = BlueLLMMessagesAdapter().translate_completion_input_params_with_tool_mapping(
         dict(body)
     )
     tools = [m for m in req["messages"] if m["role"] == "tool"]
@@ -302,7 +301,7 @@ def test_tool_result_is_error_marks_list_content():
             }
         ],
     }
-    req, _ = BlueLLMAdapter().translate_completion_input_params_with_tool_mapping(
+    req, _ = BlueLLMMessagesAdapter().translate_completion_input_params_with_tool_mapping(
         dict(body)
     )
     tool_msg = next(m for m in req["messages"] if m["role"] == "tool")
@@ -316,7 +315,7 @@ def test_empty_content_yields_empty_text_block():
     # M11: when the upstream returns no content and no tool calls (e.g. a
     # content_filter refusal), the Anthropic response must still carry a
     # non-empty content array; emit an empty text block rather than [].
-    out = BlueLLMAdapter().translate_completion_output_params(
+    out = BlueLLMMessagesAdapter().translate_completion_output_params(
         response=text_completion(text=None, finish_reason="content_filter"),
         tool_name_mapping={},
     )
@@ -380,7 +379,7 @@ def test_streaming_thinking_block_nonstr_raises_typeerror():
 
 def _translate(messages, **extra):
     body = {"model": "claude-sonnet-4", "max_tokens": 16, "messages": messages, **extra}
-    req, mapping = BlueLLMAdapter().translate_completion_input_params_with_tool_mapping(
+    req, mapping = BlueLLMMessagesAdapter().translate_completion_input_params_with_tool_mapping(
         dict(body)
     )
     return req, mapping

@@ -133,15 +133,14 @@ class UnsupportedContentError(ValueError):
     """
 
 
-class BlueLLMAdapter:
-    """非ストリーミングエントリーポイント向けのメッセージ変換ファサード。
+class BlueLLMMessagesAdapter:
+    """Anthropic Messages 形式と OpenAI Chat Completions 形式（入力パラメーター、
+    出力コンテンツ、ストリーミングチャンク）の間のコアトランスレーター。
 
-    リクエストハンドラーが使用する ``translate_completion_input_params_with_tool_mapping``
-    および ``translate_completion_output_params`` を公開する。
-    実際の処理は :class:`BlueLLMMessagesAdapter` が担当する。ステートレスで再利用可能。
+    リクエスト間でステートレスかつ再利用可能。
     """
 
-    def __init__(self) -> None:
+    def __init__(self):
         """インスタンス状態なし。アダプターはステートレス。"""
         pass
 
@@ -183,7 +182,7 @@ class BlueLLMAdapter:
         (
             translated_body,
             tool_name_mapping,
-        ) = BlueLLMMessagesAdapter().translate_anthropic_to_openai(
+        ) = self.translate_anthropic_to_openai(
             anthropic_message_request=request_body
         )
 
@@ -204,7 +203,7 @@ class BlueLLMAdapter:
                               OpenAI の64文字制限を超えた tool の名前を復元するために使用する。
             polyfill_result: context_management ポリフィルの PolyfillResult。
         """
-        return BlueLLMMessagesAdapter().translate_openai_response_to_anthropic(
+        return self.translate_openai_response_to_anthropic(
             response=response,
             tool_name_mapping=tool_name_mapping,
             polyfill_result=polyfill_result,
@@ -252,18 +251,6 @@ class BlueLLMAdapter:
         if is_async:
             return anthropic_wrapper.async_anthropic_sse_wrapper()
         return anthropic_wrapper.anthropic_sse_wrapper()
-
-
-class BlueLLMMessagesAdapter:
-    """Anthropic Messages 形式と OpenAI Chat Completions 形式（入力パラメーター、
-    出力コンテンツ、ストリーミングチャンク）の間のコアトランスレーター。
-
-    リクエスト間でステートレスかつ再利用可能。
-    """
-
-    def __init__(self):
-        """インスタンス状態なし。アダプターはステートレス。"""
-        pass
 
     ### [BETA] `/v1/messages` エンドポイントサポート用
 

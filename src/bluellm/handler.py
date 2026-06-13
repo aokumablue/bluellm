@@ -6,7 +6,7 @@ from typing import Any, AsyncIterator, Dict, Tuple, Union
 
 from bluellm.config import ModelConfig
 from bluellm.providers.openai_like import get_provider
-from bluellm.translation import BlueLLMAdapter
+from bluellm.translation import BlueLLMMessagesAdapter
 
 
 async def process(
@@ -18,7 +18,7 @@ async def process(
     ストリーム時は SSE バイトチャンクの非同期イテレーター。
     """
     stream = bool(body.get("stream", False))
-    adapter = BlueLLMAdapter()
+    adapter = BlueLLMMessagesAdapter()
 
     openai_request, tool_name_mapping = (
         adapter.translate_completion_input_params_with_tool_mapping(dict(body))
