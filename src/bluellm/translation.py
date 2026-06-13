@@ -1308,32 +1308,7 @@ class BlueLLMMessagesAdapter:
                 and choice.message.thinking_blocks
             ):
                 for thinking_block in choice.message.thinking_blocks:
-                    if thinking_block.get("type") == "thinking":
-                        thinking_value = thinking_block.get("thinking", "")
-                        signature_value = thinking_block.get("signature", "")
-                        new_content.append(
-                            AnthropicResponseContentBlockThinking(
-                                type="thinking",
-                                thinking=(
-                                    str(thinking_value)
-                                    if thinking_value is not None
-                                    else ""
-                                ),
-                                signature=(
-                                    str(signature_value)
-                                    if signature_value is not None
-                                    else None
-                                ),
-                            ).model_dump()
-                        )
-                    elif thinking_block.get("type") == "redacted_thinking":
-                        data_value = thinking_block.get("data", "")
-                        new_content.append(
-                            AnthropicResponseContentBlockRedactedThinking(
-                                type="redacted_thinking",
-                                data=str(data_value) if data_value is not None else "",
-                            ).model_dump()
-                        )
+                    self._append_anthropic_thinking_block(thinking_block, new_content)
             # thinking_blocks がない場合は reasoning_content を処理する
             elif (
                 hasattr(choice.message, "reasoning_content")
@@ -1360,48 +1335,98 @@ class BlueLLMMessagesAdapter:
                 and len(choice.message.tool_calls) > 0
             ):
                 for tool_call in choice.message.tool_calls:
-                    # provider_specific_fields のみから signature を取得する
-                    signature = self._extract_signature_from_tool_call(tool_call)
-
-                    provider_specific_fields = {}
-                    if signature:
-                        provider_specific_fields["signature"] = signature
-
-                    # 切り詰められた tool 名を元の名前に復元する
-                    truncated_name = tool_call.function.name or ""
-                    original_name = (
-                        tool_name_mapping.get(truncated_name, truncated_name)
-                        if tool_name_mapping
-                        else truncated_name
-                    )
-
-                    # Gemini の thought-signature サフィックスを id から除去する（ストリーミング
-                    # パスと同様）。base64 文字（+ / =）は Anthropic の
-                    # `^[a-zA-Z0-9_-]+$` tool_use.id パターンに違反し、リプレイ時に問題が生じる。
-                    raw_id = tool_call.id or ""
-                    base_id = (
-                        raw_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)[0]
-                        if THOUGHT_SIGNATURE_SEPARATOR in raw_id
-                        else raw_id
-                    )
-                    tool_use_block = AnthropicResponseContentBlockToolUse(
-                        type="tool_use",
-                        id=base_id,
-                        name=original_name,
-                        input=parse_tool_call_arguments(
-                            tool_call.function.arguments,
-                            tool_name=original_name,
-                            context="Anthropic pass-through adapter",
-                        ),
-                    )
-                    # signature が存在する場合は provider_specific_fields を追加する
-                    if provider_specific_fields:
-                        tool_use_block.provider_specific_fields = (
-                            provider_specific_fields
+                    new_content.append(
+                        self._build_anthropic_tool_use_block(
+                            tool_call, tool_name_mapping
                         )
-                    new_content.append(tool_use_block.model_dump())
+                    )
 
         return new_content
+
+    @staticmethod
+    def _append_anthropic_thinking_block(
+        thinking_block: Dict[str, Any],
+        new_content: List[Dict[str, Any]],
+    ) -> None:
+        """OpenAI の thinking_block を Anthropic の content block へ変換し追加する。
+
+        ``type`` が thinking なら thinking ブロック、redacted_thinking なら
+        redacted_thinking ブロックを ``new_content`` に追加する。
+        """
+        if thinking_block.get("type") == "thinking":
+            thinking_value = thinking_block.get("thinking", "")
+            signature_value = thinking_block.get("signature", "")
+            new_content.append(
+                AnthropicResponseContentBlockThinking(
+                    type="thinking",
+                    thinking=(
+                        str(thinking_value) if thinking_value is not None else ""
+                    ),
+                    signature=(
+                        str(signature_value)
+                        if signature_value is not None
+                        else None
+                    ),
+                ).model_dump()
+            )
+        elif thinking_block.get("type") == "redacted_thinking":
+            data_value = thinking_block.get("data", "")
+            new_content.append(
+                AnthropicResponseContentBlockRedactedThinking(
+                    type="redacted_thinking",
+                    data=str(data_value) if data_value is not None else "",
+                ).model_dump()
+            )
+
+    def _build_anthropic_tool_use_block(
+        self,
+        tool_call: Any,
+        tool_name_mapping: Optional[Dict[str, str]],
+    ) -> Dict[str, Any]:
+        """OpenAI の tool_call を Anthropic の tool_use content block へ変換する。
+
+        provider_specific_fields から signature を取得し、切り詰められた tool 名を
+        ``tool_name_mapping`` で元の名前に復元し、Gemini の thought-signature
+        サフィックスを id から除去したうえで model_dump() した dict を返す。
+        """
+        # provider_specific_fields のみから signature を取得する
+        signature = self._extract_signature_from_tool_call(tool_call)
+
+        provider_specific_fields = {}
+        if signature:
+            provider_specific_fields["signature"] = signature
+
+        # 切り詰められた tool 名を元の名前に復元する
+        truncated_name = tool_call.function.name or ""
+        original_name = (
+            tool_name_mapping.get(truncated_name, truncated_name)
+            if tool_name_mapping
+            else truncated_name
+        )
+
+        # Gemini の thought-signature サフィックスを id から除去する（ストリーミング
+        # パスと同様）。base64 文字（+ / =）は Anthropic の
+        # `^[a-zA-Z0-9_-]+$` tool_use.id パターンに違反し、リプレイ時に問題が生じる。
+        raw_id = tool_call.id or ""
+        base_id = (
+            raw_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)[0]
+            if THOUGHT_SIGNATURE_SEPARATOR in raw_id
+            else raw_id
+        )
+        tool_use_block = AnthropicResponseContentBlockToolUse(
+            type="tool_use",
+            id=base_id,
+            name=original_name,
+            input=parse_tool_call_arguments(
+                tool_call.function.arguments,
+                tool_name=original_name,
+                context="Anthropic pass-through adapter",
+            ),
+        )
+        # signature が存在する場合は provider_specific_fields を追加する
+        if provider_specific_fields:
+            tool_use_block.provider_specific_fields = provider_specific_fields
+        return tool_use_block.model_dump()
 
     @staticmethod
     def _translate_openai_finish_reason_to_anthropic(
