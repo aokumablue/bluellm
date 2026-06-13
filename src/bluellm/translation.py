@@ -267,7 +267,8 @@ class BlueLLMMessagesAdapter:
 
     ### [BETA] `/v1/messages` エンドポイントサポート用
 
-    def _extract_signature_from_tool_call(self, tool_call: Any) -> Optional[str]:
+    @staticmethod
+    def _extract_signature_from_tool_call(tool_call: Any) -> Optional[str]:
         """
         tool call の provider_specific_fields から signature を取得する。
         provider_specific_fields のみを確認し、thinking ブロックは確認しない。
@@ -291,8 +292,9 @@ class BlueLLMMessagesAdapter:
 
         return signature
 
+    @staticmethod
     def _extract_signature_from_tool_use_content(
-        self, content: Dict[str, Any]
+        content: Dict[str, Any],
     ) -> Optional[str]:
         """
         tool_use content block の provider_specific_fields から signature を取得する。
@@ -339,7 +341,8 @@ class BlueLLMMessagesAdapter:
         """OpenAI 形式に変換が必要な Anthropic パラメーターの一覧。"""
         return _TRANSLATABLE_ANTHROPIC_PARAMS
 
-    def _is_web_search_tool(self, tool: Dict[str, Any]) -> bool:
+    @staticmethod
+    def _is_web_search_tool(tool: Dict[str, Any]) -> bool:
         """
         Anthropic の web search tool かどうかを確認する。
 
@@ -782,8 +785,9 @@ class BlueLLMMessagesAdapter:
         model_lower = model.lower()
         return "anthropic" in model_lower or "claude" in model_lower
 
+    @staticmethod
     def translate_anthropic_tool_choice_to_openai(
-        self, tool_choice: AnthropicMessagesToolChoice
+        tool_choice: AnthropicMessagesToolChoice,
     ) -> ChatCompletionToolChoiceValues:
         """Anthropic の ``tool_choice`` を OpenAI の同等形式に変換する。"""
         if tool_choice["type"] == "any":
@@ -978,8 +982,8 @@ class BlueLLMMessagesAdapter:
                     ChatCompletionSystemMessage(role="system", content=openai_system_content),  # type: ignore
                 )
 
+    @staticmethod
     def _translate_metadata_to_openai(
-        self,
         anthropic_message_request: AnthropicMessagesRequest,
         new_kwargs: ChatCompletionRequest,
     ) -> None:
@@ -1198,7 +1202,8 @@ class BlueLLMMessagesAdapter:
             separator = "\n" if existing else ""
             tool_message["content"] = f"{marker}{separator}{existing or ''}"
 
-    def _translate_anthropic_image_to_openai(self, image_source: dict) -> str:
+    @staticmethod
+    def _translate_anthropic_image_to_openai(image_source: dict) -> str:
         """
         Anthropic の image source を OpenAI 互換の image URL に変換する。
 
@@ -1350,8 +1355,9 @@ class BlueLLMMessagesAdapter:
 
         return new_content
 
+    @staticmethod
     def _translate_openai_finish_reason_to_anthropic(
-        self, openai_finish_reason: str
+        openai_finish_reason: str,
     ) -> AnthropicFinishReason:
         """OpenAI の ``finish_reason`` を Anthropic の ``stop_reason`` にマッピングする。"""
         if openai_finish_reason == "stop":
@@ -1456,8 +1462,9 @@ class BlueLLMMessagesAdapter:
 
         return translated_obj
 
+    @staticmethod
     def _translate_streaming_openai_chunk_to_anthropic_content_block(
-        self, choices: List[Union[OpenAIStreamingChoice, StreamingChoices]]
+        choices: List[Union[OpenAIStreamingChoice, StreamingChoices]],
     ) -> Tuple[
         Literal["text", "tool_use", "thinking"],
         "ContentBlockContentBlockDict",
@@ -1538,8 +1545,9 @@ class BlueLLMMessagesAdapter:
 
         return "text", TextBlock(type="text", text="")
 
+    @staticmethod
     def _translate_streaming_openai_chunk_to_anthropic(
-        self, choices: List[Union[OpenAIStreamingChoice, StreamingChoices]]
+        choices: List[Union[OpenAIStreamingChoice, StreamingChoices]],
     ) -> Tuple[
         Literal["text_delta", "input_json_delta", "thinking_delta", "signature_delta"],
         Union[
