@@ -3,6 +3,7 @@ from bluellm.translation._request import _RequestMixin
 from bluellm.translation._request_common import _RequestCommonMixin
 from bluellm.translation._request_schema import _RequestSchemaMixin
 from bluellm.translation._request_thinking import _RequestThinkingMixin
+from bluellm.translation._request_tools import _RequestToolsMixin
 from bluellm.translation._response import _ResponseMixin
 from bluellm.translation._streaming_translation import _StreamingTranslationMixin
 from bluellm.translation._tools import truncate_tool_name
@@ -16,6 +17,7 @@ __all__ = [
 
 class BlueLLMMessagesAdapter(
     _RequestMixin,
+    _RequestToolsMixin,
     _RequestSchemaMixin,
     _RequestThinkingMixin,
     _RequestCommonMixin,
