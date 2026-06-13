@@ -1,6 +1,6 @@
 from bluellm.translation._errors import UnsupportedContentError
-from bluellm.translation._request import _RequestMixin
 from bluellm.translation._request_common import _RequestCommonMixin
+from bluellm.translation._request_message import _RequestMessageMixin
 from bluellm.translation._request_schema import _RequestSchemaMixin
 from bluellm.translation._request_thinking import _RequestThinkingMixin
 from bluellm.translation._request_tools import _RequestToolsMixin
@@ -16,7 +16,7 @@ __all__ = [
 
 
 class BlueLLMMessagesAdapter(
-    _RequestMixin,
+    _RequestMessageMixin,
     _RequestToolsMixin,
     _RequestSchemaMixin,
     _RequestThinkingMixin,

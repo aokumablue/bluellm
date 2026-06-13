@@ -34,7 +34,7 @@ from bluellm.types.openai import (
 )
 
 
-class _RequestMixin:
+class _RequestMessageMixin:
     """Anthropic Messages リクエストを OpenAI Chat Completions 形式へ変換する変換群。"""
 
     def translate_completion_input_params_with_tool_mapping(
