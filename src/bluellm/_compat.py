@@ -4,7 +4,13 @@
 属性互換なオブジェクトを対象に動作する。重い内部型
 （`ModelResponse`、`Usage` など）はアノテーションや `isinstance`
 ガード内にのみ現れ、OpenAI/Azure パスでは有効にならないため、
-ここでは軽量なプレースホルダーとして提供する。
+ここでは軽量な Protocol スタブとして提供する。
+
+`StreamingChoices` は translation.py 内の `isinstance` ガードで使用されるため
+（常に False だが挙動を維持する）空クラスのまま温存する。
+他のクラス（`ModelResponse`、`Usage`、`Choices`）はアノテーション専用 Protocol
+として定義し、mypy の `attr-defined` エラーを削減する。
+`@runtime_checkable` は付与しない（isinstance 禁止）。
 """
 
 from __future__ import annotations
@@ -12,7 +18,9 @@ from __future__ import annotations
 import logging
 import os
 import uuid as uuid  # 再エクスポート用；移植コードが `uuid.uuid4()` を呼び出す
-from typing import Any, Optional
+from typing import Any, List, Optional
+
+from typing_extensions import Protocol
 
 verbose_logger = logging.getLogger("bluellm")
 
@@ -24,28 +32,40 @@ def is_reasoning_auto_summary_enabled() -> bool:
     return os.getenv("BLUELLM_REASONING_AUTO_SUMMARY", "false").lower() == "true"
 
 
-# --- 内部型プレースホルダー ---------------------------------------------
-# アノテーションと `isinstance(...)` ガードにのみ使用される。実際の実行時
-# オブジェクトは openai SDK の ChatCompletion / ChatCompletionChunk であり、
-# これらのクラスのインスタンスにはならないため、内部分岐は無効のまま保たれる。
-class ModelResponse:  # noqa: D401 - placeholder
-    pass
+# --- 内部型 Protocol スタブ -----------------------------------------------
+# `@runtime_checkable` は付与しない（isinstance での使用禁止）。
+# 実際の実行時オブジェクトは openai SDK の ChatCompletion / ChatCompletionChunk
+# であり、これらのクラスのインスタンスにはならない。
+class Usage(Protocol):
+    """openai SDK の Usage オブジェクトと属性互換な Protocol。"""
+
+    prompt_tokens: int
+    completion_tokens: int
+    prompt_tokens_details: Any
 
 
-class ModelResponseStream:  # noqa: D401 - placeholder
-    pass
+class Choices(Protocol):
+    """openai SDK の Choice オブジェクトと属性互換な Protocol。"""
+
+    message: Any
+    finish_reason: Any
 
 
-class Usage:  # noqa: D401 - placeholder
-    pass
+class ModelResponse(Protocol):
+    """openai SDK の ChatCompletion オブジェクトと属性互換な Protocol。"""
+
+    id: str
+    model: Optional[str]
+    choices: List[Choices]
+    usage: Usage
 
 
-class Choices:  # noqa: D401 - placeholder
-    pass
+class ModelResponseStream(Protocol):
+    """openai SDK の ChatCompletionChunk ストリームと属性互換な Protocol。"""
 
 
-class StreamingChoices:  # noqa: D401 - placeholder
-    pass
+class StreamingChoices:  # noqa: D401 - isinstance ガード用；空クラスを温存（挙動は常に False）
+    """translation.py の isinstance ガードで参照される空クラス（runtime 挙動維持）。"""
 
 
 # コンテキスト管理ポリフィルは実行されない；`polyfill_result` は常に None。
