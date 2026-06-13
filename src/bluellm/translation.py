@@ -630,21 +630,13 @@ class BlueLLMMessagesAdapter:
         """
         tool_result_start = len(tool_message_list)
         if "content" not in content:
-            tool_result = ChatCompletionToolMessage(
-                role="tool",
-                tool_call_id=content.get("tool_use_id", ""),
-                content="",
+            self._append_tool_result_message(
+                content, "", tool_message_list, model
             )
-            self._add_cache_control_if_applicable(content, tool_result, model)
-            tool_message_list.append(tool_result)  # type: ignore[arg-type]
         elif isinstance(content.get("content"), str):
-            tool_result = ChatCompletionToolMessage(
-                role="tool",
-                tool_call_id=content.get("tool_use_id", ""),
-                content=str(content.get("content", "")),
+            self._append_tool_result_message(
+                content, str(content.get("content", "")), tool_message_list, model
             )
-            self._add_cache_control_if_applicable(content, tool_result, model)
-            tool_message_list.append(tool_result)  # type: ignore[arg-type]
         elif isinstance(content.get("content"), list):
             # 同じ ID を持つ複数の tool_result ブロックが生成されないよう、
             # すべての content アイテムを1つの tool メッセージに結合する
@@ -655,82 +647,33 @@ class BlueLLMMessagesAdapter:
             if len(content_items) == 1:
                 c = content_items[0]
                 if isinstance(c, str):
-                    tool_result = ChatCompletionToolMessage(
-                        role="tool",
-                        tool_call_id=content.get("tool_use_id", ""),
-                        content=c,
+                    self._append_tool_result_message(
+                        content, c, tool_message_list, model
                     )
-                    self._add_cache_control_if_applicable(content, tool_result, model)
-                    tool_message_list.append(tool_result)  # type: ignore[arg-type]
                 elif isinstance(c, dict):
                     if c.get("type") == "text":
-                        tool_result = ChatCompletionToolMessage(
-                            role="tool",
-                            tool_call_id=content.get("tool_use_id", ""),
-                            content=c.get("text", ""),
+                        self._append_tool_result_message(
+                            content, c.get("text", ""), tool_message_list, model
                         )
-                        self._add_cache_control_if_applicable(
-                            content, tool_result, model
-                        )
-                        tool_message_list.append(tool_result)  # type: ignore[arg-type]
                     elif c.get("type") == "image":
                         source = c.get("source", {})
                         openai_image_url = self._translate_anthropic_image_to_openai(
                             cast(dict, source)
                         )
-                        tool_result = ChatCompletionToolMessage(
-                            role="tool",
-                            tool_call_id=content.get("tool_use_id", ""),
-                            content=openai_image_url,
+                        self._append_tool_result_message(
+                            content, openai_image_url, tool_message_list, model
                         )
-                        self._add_cache_control_if_applicable(
-                            content, tool_result, model
-                        )
-                        tool_message_list.append(tool_result)  # type: ignore[arg-type]
             else:
                 # 複数の content アイテムは、すべてのアイテムを保持しながら
                 # 1つの tool_use_id を持つ単一の tool メッセージに結合する
-                combined_content_parts: List[
-                    Union[
-                        ChatCompletionTextObject,
-                        ChatCompletionImageObject,
-                    ]
-                ] = []
-                for c in content_items:
-                    if isinstance(c, str):
-                        combined_content_parts.append(
-                            ChatCompletionTextObject(type="text", text=c)
-                        )
-                    elif isinstance(c, dict):
-                        if c.get("type") == "text":
-                            combined_content_parts.append(
-                                ChatCompletionTextObject(
-                                    type="text",
-                                    text=c.get("text", ""),
-                                )
-                            )
-                        elif c.get("type") == "image":
-                            source = c.get("source", {})
-                            openai_image_url = self._translate_anthropic_image_to_openai(
-                                cast(dict, source)
-                            )
-                            combined_content_parts.append(
-                                ChatCompletionImageObject(
-                                    type="image_url",
-                                    image_url=ChatCompletionImageUrlObject(
-                                        url=openai_image_url
-                                    ),
-                                )
-                            )
+                combined_content_parts = self._build_combined_tool_result_content(
+                    content_items
+                )
                 # 結合した content を持つ単一の tool メッセージを生成する
                 if combined_content_parts:
-                    tool_result = ChatCompletionToolMessage(
-                        role="tool",
-                        tool_call_id=content.get("tool_use_id", ""),
-                        content=combined_content_parts,  # type: ignore
+                    self._append_tool_result_message(
+                        content, combined_content_parts, tool_message_list, model
                     )
-                    self._add_cache_control_if_applicable(content, tool_result, model)
-                    tool_message_list.append(tool_result)  # type: ignore[arg-type]
         if content.get("is_error"):
             # M9: Anthropic の tool_result の is_error フラグには OpenAI tool メッセージの
             # 相当フィールドがない。これがないと、モデルは失敗した tool 呼び出しを成功として
@@ -738,6 +681,71 @@ class BlueLLMMessagesAdapter:
             # すべてのメッセージにマーカーを付与する。
             for tr in tool_message_list[tool_result_start:]:
                 self._apply_tool_result_error_marker(tr)
+
+    def _append_tool_result_message(
+        self,
+        content: Dict[str, Any],
+        content_value: Any,
+        tool_message_list: List[ChatCompletionToolMessage],
+        model: Optional[str],
+    ) -> None:
+        """tool_result の content 値から OpenAI tool メッセージを構築し追加する。
+
+        ``content`` の ``tool_use_id`` を流用してメッセージを生成し、
+        cache_control を適用したうえで ``tool_message_list`` に追加する。
+        各 content 形式（空/文字列/単一アイテム/結合リスト）に共通する
+        ボイラープレートを集約する。
+        """
+        tool_result = ChatCompletionToolMessage(
+            role="tool",
+            tool_call_id=content.get("tool_use_id", ""),
+            content=content_value,
+        )
+        self._add_cache_control_if_applicable(content, tool_result, model)
+        tool_message_list.append(tool_result)  # type: ignore[arg-type]
+
+    def _build_combined_tool_result_content(
+        self,
+        content_items: List[Any],
+    ) -> List[Union[ChatCompletionTextObject, ChatCompletionImageObject]]:
+        """複数の tool_result content アイテムを結合 content パーツに変換する。
+
+        文字列および text/image dict を OpenAI の content オブジェクトへ変換して
+        順に蓄積し、単一 tool メッセージへ結合するためのリストを返す。
+        """
+        combined_content_parts: List[
+            Union[
+                ChatCompletionTextObject,
+                ChatCompletionImageObject,
+            ]
+        ] = []
+        for c in content_items:
+            if isinstance(c, str):
+                combined_content_parts.append(
+                    ChatCompletionTextObject(type="text", text=c)
+                )
+            elif isinstance(c, dict):
+                if c.get("type") == "text":
+                    combined_content_parts.append(
+                        ChatCompletionTextObject(
+                            type="text",
+                            text=c.get("text", ""),
+                        )
+                    )
+                elif c.get("type") == "image":
+                    source = c.get("source", {})
+                    openai_image_url = self._translate_anthropic_image_to_openai(
+                        cast(dict, source)
+                    )
+                    combined_content_parts.append(
+                        ChatCompletionImageObject(
+                            type="image_url",
+                            image_url=ChatCompletionImageUrlObject(
+                                url=openai_image_url
+                            ),
+                        )
+                    )
+        return combined_content_parts
 
     @staticmethod
     def translate_anthropic_thinking_to_reasoning_effort(
