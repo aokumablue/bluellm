@@ -196,6 +196,8 @@ class _ResponseMixin:
         ともに常に設定される）。``cache_creation_input_tokens`` / ``cache_read_input_tokens``
         は対応する値が正の場合のみ設定する。``AnthropicUsage`` と ``UsageDelta`` の双方が
         実行時 dict であり同一キー集合を持つため、両者で共用する。
+        ``cached_tokens > prompt_tokens`` や負の ``completion_tokens`` による負数露出を
+        防ぐため、``input_tokens`` / ``output_tokens`` は ``max(0, ...)`` でクランプする。
         """
         uncached_input_tokens = usage.prompt_tokens or 0
         cached_tokens = 0
@@ -204,10 +206,11 @@ class _ResponseMixin:
                 getattr(usage.prompt_tokens_details, "cached_tokens", 0) or 0
             )
             uncached_input_tokens -= cached_tokens
+        uncached_input_tokens = max(0, uncached_input_tokens)
 
         result: Dict[str, int] = {
             "input_tokens": uncached_input_tokens,
-            "output_tokens": usage.completion_tokens or 0,
+            "output_tokens": max(0, usage.completion_tokens or 0),
         }
         if (
             hasattr(usage, "_cache_creation_input_tokens")

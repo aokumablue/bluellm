@@ -278,6 +278,25 @@ def _legacy_usage_dict(usage):
     return result
 
 
+def test_build_usage_dict_negative_input_tokens_clamped_to_zero():
+    """cached > prompt のとき input_tokens が負にならず 0 にクランプされる（M-3）。"""
+    usage = _usage(prompt=5, completion=3, cached=10)
+    result = M._build_usage_dict(usage)
+    assert result["input_tokens"] == 0, f"expected 0, got {result['input_tokens']}"
+    assert result["cache_read_input_tokens"] == 10
+
+
+def test_build_usage_dict_negative_output_tokens_clamped_to_zero():
+    """completion_tokens が負のとき output_tokens が負にならず 0 にクランプされる（M-3）。"""
+    u = SimpleNamespace(
+        prompt_tokens=10,
+        completion_tokens=-3,
+        prompt_tokens_details=None,
+    )
+    result = M._build_usage_dict(u)
+    assert result["output_tokens"] == 0, f"expected 0, got {result['output_tokens']}"
+
+
 @pytest.mark.parametrize(
     "prompt,completion,cached,cache_creation",
     [
