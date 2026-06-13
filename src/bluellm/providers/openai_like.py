@@ -182,7 +182,7 @@ class OpenAILikeProvider(BaseProvider):
         # モデルが拒否した未サポートパラメータを自動削除してリトライする。
         # モデルごとの対応表は不要。
         prepared = self._prepare(request)
-        # debug 用: upsteam が渡した候補パラメータの存在/型記録
+        # debug 用: upstream が渡した候補パラメータの存在/型記録
         logger.debug(
             "Prepared request keys/types: stop=%r (%s) stop_sequences=%r (%s) thinking=%r (%s) reasoning_effort=%r (%s) stream=%r stream_options=%r",
             type(prepared.get("stop")).__name__,

@@ -639,8 +639,6 @@ class ANTHROPIC_HOSTED_TOOLS(str, Enum):
     TOOL_SEARCH_TOOL = "tool_search_tool"
 
 
-
-
 class AnthropicResponseTextBlock(TypedDict, total=False):
     """
     Anthropic Response Text Block: https://docs.anthropic.com/en/api/messages
@@ -690,16 +688,11 @@ AnthropicResponseContentBlock: TypeAlias = Union[
 
 
 class AnthropicUsage(TypedDict, total=False):
-    """
-    リクエストで使用された入出力token数
-    """
+    """リクエストで使用されたtoken数。"""
 
     input_tokens: int
     output_tokens: int
-
-    """
-    使用されたキャッシュtoken数
-    """
+    # 使用されたキャッシュtoken数
     cache_creation_input_tokens: int
     cache_read_input_tokens: int
 
