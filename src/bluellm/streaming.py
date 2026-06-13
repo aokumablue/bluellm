@@ -431,17 +431,7 @@ class BlueLLMStreamWrapper(AdapterCompletionStreamWrapper):
             and getattr(chunk, "usage", None) is not None
         )
         if not has_choices:
-            if will_merge_into_held:
-                merged_chunk = self._merge_usage_into_held_stop_reason_chunk(chunk)
-                self.chunk_queue.append(merged_chunk)
-                self.queued_usage_chunk = True
-                self.holding_stop_reason_chunk = None
-                return self.chunk_queue.popleft()
-            if self.queued_usage_chunk:
-                # usage はすでにマージ＆発行済み。以降の空チャンクは
-                # Anthropic SSE 順序に寄与しないため破棄する。
-                return None
-            return None
+            return self._handle_no_choices_chunk(chunk, will_merge_into_held)
         is_final_chunk = choices[0].finish_reason is not None
         processed_chunk = BlueLLMMessagesAdapter().translate_streaming_openai_response_to_anthropic(
             response=chunk,
@@ -455,11 +445,7 @@ class BlueLLMStreamWrapper(AdapterCompletionStreamWrapper):
 
         # usage チャンクかつ保持中の stop_reason チャンクがある場合
         if will_merge_into_held:
-            merged_chunk = self._merge_usage_into_held_stop_reason_chunk(chunk)
-            self.chunk_queue.append(merged_chunk)
-            self.queued_usage_chunk = True
-            self.holding_stop_reason_chunk = None
-            return self.chunk_queue.popleft()
+            return self._merge_usage_and_dequeue(chunk)
 
         if self.queued_usage_chunk:
             # usage はすでにマージ＆発行済み。以降のプロバイダーイベントは
@@ -469,67 +455,118 @@ class BlueLLMStreamWrapper(AdapterCompletionStreamWrapper):
             return None
 
         if should_start_new_block and not self.sent_content_block_finish:
-            # シーケンスをキューイング: content_block_stop -> content_block_start
-            # テキストブロックの場合、トリガーチャンクは別のデルタとして発行しない。
-            # content_block_start がその情報を運ぶため。
-            # tool_use ブロックの場合、トリガーチャンクが input_json_delta データを
-            # 持つ場合はデルタも発行しなければならない。一部のプロバイダー
-            # （xAI、Gemini など）は関数名/id と同じストリーミングチャンクに
-            # tool 引数を含めるため。
-
-            # 1. 現在の content block を停止
-            self.chunk_queue.append(
-                {
-                    "type": "content_block_stop",
-                    "index": max(self.current_content_block_index - 1, 0),
-                }
-            )
-
-            # 2. 新しい content block を開始
-            self.chunk_queue.append(
-                {
-                    "type": "content_block_start",
-                    "index": self.current_content_block_index,
-                    "content_block": self.current_content_block_start,
-                }
-            )
-
-            # 3. トリガーチャンクが tool 引数データを持つ場合、
-            # input_json_delta が暗黙的に破棄されないようキューイングする。
-            if (
-                processed_chunk.get("type") == "content_block_delta"
-                and isinstance(processed_chunk.get("delta"), dict)
-                and processed_chunk["delta"].get("type") == "input_json_delta"
-                and processed_chunk["delta"].get("partial_json")
-            ):
-                self.chunk_queue.append(processed_chunk)
-
-            self.sent_content_block_finish = False
-            return self.chunk_queue.popleft()
+            return self._queue_content_block_transition(processed_chunk)
 
         if (
             processed_chunk["type"] == "message_delta"
             and self.sent_content_block_finish is False
         ):
-            # content_block_stop と message_delta の両方をキューイング
-            self.chunk_queue.append(
-                {
-                    "type": "content_block_stop",
-                    "index": self.current_content_block_index,
-                }
-            )
-            self.sent_content_block_finish = True
-            if processed_chunk.get("delta", {}).get("stop_reason") is not None:
-                self.holding_stop_reason_chunk = processed_chunk
-            else:  # pragma: no cover - message_delta は常に stop_reason を持つ
-                processed_chunk = self._augment_message_delta_usage(processed_chunk)
-                self.chunk_queue.append(processed_chunk)
-            return self.chunk_queue.popleft()
+            return self._queue_message_delta_with_block_stop(processed_chunk)
         if (  # pragma: no cover - message_delta は常に上記の分岐で処理される
             processed_chunk.get("type") == "message_delta"
         ):
             processed_chunk = self._augment_message_delta_usage(processed_chunk)
         self.chunk_queue.append(processed_chunk)
+        return self.chunk_queue.popleft()
+
+    def _merge_usage_and_dequeue(self, chunk: Any) -> Optional[Dict[str, Any]]:
+        """usage チャンクを保持中の stop_reason チャンクへマージしてキューを進める。
+
+        マージ済みチャンクをキューに積み、``queued_usage_chunk`` を立て、
+        保持中チャンクをクリアしてから先頭イベントを返す。
+        """
+        merged_chunk = self._merge_usage_into_held_stop_reason_chunk(chunk)
+        self.chunk_queue.append(merged_chunk)
+        self.queued_usage_chunk = True
+        self.holding_stop_reason_chunk = None
+        return self.chunk_queue.popleft()
+
+    def _handle_no_choices_chunk(
+        self, chunk: Any, will_merge_into_held: bool
+    ) -> Optional[Dict[str, Any]]:
+        """choices を持たないチャンク（usage 専用/空チャンク）を処理する。
+
+        保持中の stop_reason チャンクがあれば usage をマージして発行し、
+        それ以外（usage 発行済み、または寄与しない空チャンク）は None を返して
+        破棄する。
+        """
+        if will_merge_into_held:
+            return self._merge_usage_and_dequeue(chunk)
+        if self.queued_usage_chunk:
+            # usage はすでにマージ＆発行済み。以降の空チャンクは
+            # Anthropic SSE 順序に寄与しないため破棄する。
+            return None
+        return None
+
+    def _queue_content_block_transition(
+        self, processed_chunk: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        """新しい content block への遷移シーケンスをキューイングする。
+
+        ``content_block_stop`` -> ``content_block_start`` をキューに積む。
+        トリガーチャンクが tool 引数（input_json_delta）を運ぶ場合は、
+        暗黙的に破棄されないようそのデルタもキューに積む。先頭イベントを返す。
+        """
+        # シーケンスをキューイング: content_block_stop -> content_block_start
+        # テキストブロックの場合、トリガーチャンクは別のデルタとして発行しない。
+        # content_block_start がその情報を運ぶため。
+        # tool_use ブロックの場合、トリガーチャンクが input_json_delta データを
+        # 持つ場合はデルタも発行しなければならない。一部のプロバイダー
+        # （xAI、Gemini など）は関数名/id と同じストリーミングチャンクに
+        # tool 引数を含めるため。
+
+        # 1. 現在の content block を停止
+        self.chunk_queue.append(
+            {
+                "type": "content_block_stop",
+                "index": max(self.current_content_block_index - 1, 0),
+            }
+        )
+
+        # 2. 新しい content block を開始
+        self.chunk_queue.append(
+            {
+                "type": "content_block_start",
+                "index": self.current_content_block_index,
+                "content_block": self.current_content_block_start,
+            }
+        )
+
+        # 3. トリガーチャンクが tool 引数データを持つ場合、
+        # input_json_delta が暗黙的に破棄されないようキューイングする。
+        if (
+            processed_chunk.get("type") == "content_block_delta"
+            and isinstance(processed_chunk.get("delta"), dict)
+            and processed_chunk["delta"].get("type") == "input_json_delta"
+            and processed_chunk["delta"].get("partial_json")
+        ):
+            self.chunk_queue.append(processed_chunk)
+
+        self.sent_content_block_finish = False
+        return self.chunk_queue.popleft()
+
+    def _queue_message_delta_with_block_stop(
+        self, processed_chunk: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        """まだ閉じていないブロックの ``content_block_stop`` と message_delta を処理する。
+
+        先に ``content_block_stop`` をキューに積む。stop_reason を持つ
+        message_delta は usage マージのため保持し、持たない場合は usage を
+        付与してキューに積む。先頭イベントを返す。
+        """
+        # content_block_stop と message_delta の両方をキューイング
+        self.chunk_queue.append(
+            {
+                "type": "content_block_stop",
+                "index": self.current_content_block_index,
+            }
+        )
+        self.sent_content_block_finish = True
+        if processed_chunk.get("delta", {}).get("stop_reason") is not None:
+            self.holding_stop_reason_chunk = processed_chunk
+        else:  # pragma: no cover - message_delta は常に stop_reason を持つ
+            processed_chunk = self._augment_message_delta_usage(processed_chunk)
+            self.chunk_queue.append(processed_chunk)
         return self.chunk_queue.popleft()
 
     def _flush_stream_end(self) -> Optional[Dict[str, Any]]:
