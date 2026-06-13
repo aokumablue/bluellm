@@ -405,6 +405,8 @@ class BlueLLMStreamWrapper(AdapterCompletionStreamWrapper):
         if chunk == "None" or chunk is None:
             raise ValueError("upstream stream yielded a None chunk")
 
+        choices = getattr(chunk, "choices", None) or []
+        has_choices = bool(choices)
         should_start_new_block = self._should_start_new_content_block(chunk)
         if should_start_new_block:
             self._increment_content_block_index()
@@ -418,7 +420,19 @@ class BlueLLMStreamWrapper(AdapterCompletionStreamWrapper):
             self.holding_stop_reason_chunk is not None
             and getattr(chunk, "usage", None) is not None
         )
-        is_final_chunk = chunk.choices[0].finish_reason is not None
+        if not has_choices:
+            if will_merge_into_held:
+                merged_chunk = self._merge_usage_into_held_stop_reason_chunk(chunk)
+                self.chunk_queue.append(merged_chunk)
+                self.queued_usage_chunk = True
+                self.holding_stop_reason_chunk = None
+                return self.chunk_queue.popleft()
+            if self.queued_usage_chunk:
+                # usage はすでにマージ＆発行済み。以降の空チャンクは
+                # Anthropic SSE 順序に寄与しないため破棄する。
+                return None
+            return None
+        is_final_chunk = choices[0].finish_reason is not None
         processed_chunk = BlueLLMMessagesAdapter().translate_streaming_openai_response_to_anthropic(
             response=chunk,
             current_content_block_index=self.current_content_block_index,
@@ -623,9 +637,13 @@ class BlueLLMStreamWrapper(AdapterCompletionStreamWrapper):
         """
         from bluellm.translation import BlueLLMMessagesAdapter
 
+        choices = getattr(chunk, "choices", None) or []
+        if not choices:
+            return False
+
         # ロジック例 - 必要に応じてカスタマイズ:
         # チャンクが tool 呼び出しを示す場合
-        if chunk.choices[0].finish_reason is not None:
+        if choices[0].finish_reason is not None:
             return False
 
         (

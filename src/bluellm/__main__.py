@@ -14,10 +14,66 @@ import argparse
 import getpass
 import logging
 import os
+import re
 import sys
+from copy import deepcopy
 from pathlib import Path
 
 from dotenv import load_dotenv
+
+
+class _HttpxFormatter(logging.Formatter):
+    """httpx ログの見た目を整えるフォーマッタ。
+
+    - ``INFO:httpx`` のような詰まった接頭辞を ``INFO: httpx`` 形式に統一する。
+    - ``"HTTP/1.1 200 OK"`` の引用符を外してからステータス句を色付けする。
+    """
+
+    _RESET = "\x1b[0m"
+    _LEVEL_COLORS = {
+        logging.INFO: "\x1b[32m",
+        logging.WARNING: "\x1b[33m",
+        logging.ERROR: "\x1b[31m",
+        logging.CRITICAL: "\x1b[31m",
+    }
+    _STATUS_COLORS = {
+        1: "\x1b[37m",
+        2: "\x1b[32m",
+        3: "\x1b[33m",
+        4: "\x1b[31m",
+        5: "\x1b[31m",
+    }
+
+    def __init__(self, *, use_colors: bool = True) -> None:
+        """フォーマッタを初期化する。"""
+        super().__init__("%(levelname)s: %(name)s: %(message)s")
+        self._use_colors = use_colors
+
+    def format(self, record: logging.LogRecord) -> str:
+        """ログレベル接頭辞とステータス句を統一形式で整形する。"""
+        message = super().format(record)
+        message = re.sub(r"\bINFO:\s+", "INFO: ", message)
+        message = re.sub(
+            r'"(HTTP/\d\.\d \d{3} [A-Z][A-Z ]*)"', r"\1", message
+        )
+        if not self._use_colors:
+            return message
+
+        level_color = self._LEVEL_COLORS.get(record.levelno)
+        if level_color:
+            prefix = f"{record.levelname}:"
+            message = message.replace(prefix, f"{level_color}{prefix}{self._RESET}", 1)
+
+        def _paint_status(match: re.Match[str]) -> str:
+            code = int(match.group(1))
+            status = match.group(0)
+            color = self._STATUS_COLORS.get(code // 100)
+            if color is None:
+                return status
+            return f"{color}{status}{self._RESET}"
+
+        return re.sub(r"\b([1-5]\d\d) [A-Z][A-Z ]*\b", _paint_status, message)
+
 
 
 def _default_config_path() -> str:
@@ -56,12 +112,24 @@ def _is_loopback_host(host: str) -> bool:
 def _cmd_serve(args: argparse.Namespace) -> int:
     """``serve`` サブコマンドを実行する: config を読み込み uvicorn サーバーを起動する。"""
     import uvicorn
+    import uvicorn.config
 
     from bluellm import redaction
     from bluellm.config import load_config
     from bluellm.server import create_app
 
+    # ルートロガーは httpx ログ書式を統一し、uvicorn は独自 log_config で統一する。
     logging.basicConfig(level=logging.INFO)
+    for handler in logging.getLogger().handlers:
+        handler.setFormatter(_HttpxFormatter())
+
+    log_config = deepcopy(uvicorn.config.LOGGING_CONFIG)
+    log_config["formatters"]["default"]["use_colors"] = True
+    log_config["formatters"]["access"]["use_colors"] = True
+    log_config["formatters"]["access"]["fmt"] = (
+        "%(levelprefix)s %(client_addr)s - %(request_line)s %(status_code)s"
+    )
+
     config = load_config(args.config)
     redaction.install()  # load_config でシークレットが登録された後に呼び出す
 
@@ -83,7 +151,7 @@ def _cmd_serve(args: argparse.Namespace) -> int:
         )
 
     app = create_app(config)
-    uvicorn.run(app, host=host, port=port, log_level="info")
+    uvicorn.run(app, host=host, port=port, log_level="info", log_config=log_config)
     return 0
 
 

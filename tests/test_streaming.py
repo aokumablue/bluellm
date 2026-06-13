@@ -32,6 +32,23 @@ def _async_collect(chunks, **wrap_kw):
     return asyncio.run(run())
 
 
+def _async_collect_raw(chunks, **wrap_kw):
+    async def agen():
+        for c in chunks:
+            yield c
+
+    async def run():
+        wrapper = BlueLLMStreamWrapper(
+            completion_stream=agen(), model="m", tool_name_mapping={}, **wrap_kw
+        )
+        out = b""
+        async for sse in wrapper.async_anthropic_sse_wrapper():
+            out += sse if isinstance(sse, (bytes, bytearray)) else sse.encode()
+        return out.decode()
+
+    return asyncio.run(run())
+
+
 # ---- _merge_usage_into_held_stop_reason_chunk ----
 def test_merge_usage_with_cache_tokens_and_context_management():
     w = _wrap(applied_edits=[{"type": "clear_tool_uses_20250919"}])
@@ -145,6 +162,25 @@ def test_stream_drops_trailing_chunk_after_usage_merge():
     )
     assert "trailing" not in body
     assert body.count("event: message_stop") == 1
+
+
+def test_stream_raw_empty_choices_usage_only_does_not_crash():
+    body = _async_collect_raw(
+        [
+            stream_chunk(content="hi"),
+            stream_chunk(finish_reason="stop"),
+            usage_only_chunk(usage(8, 2)),
+        ]
+    )
+    assert "event: message_stop" in body
+    assert '"input_tokens": 8' in body
+    assert '"output_tokens": 2' in body
+
+
+def test_should_start_new_block_empty_choices_returns_false():
+    assert BlueLLMStreamWrapper(
+        completion_stream=iter([]), model="m", tool_name_mapping={}
+    )._should_start_new_content_block(usage_only_chunk(usage(1, 1))) is False
 
 
 # ---- _should_start_new_content_block: parallel tool calls + name restoration ----

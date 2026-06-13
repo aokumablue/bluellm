@@ -61,6 +61,10 @@ class OpenAILikeProvider(BaseProvider):
         """設定から AsyncAzureOpenAI / AsyncOpenAI クライアントを構築する。"""
         mc = self.mc
         if mc.provider == "azure":
+            # Azure OpenAI の ``.../openai/v1`` は正式な OpenAI-compatible endpoint なので、
+            # OpenAI client をそのまま使う。
+            if mc.api_base and "/openai/v1" in mc.api_base:
+                return AsyncOpenAI(api_key=mc.api_key, base_url=mc.api_base)
             params: Dict[str, Any] = {
                 "api_key": mc.api_key,
                 "api_version": mc.api_version,
@@ -91,14 +95,35 @@ class OpenAILikeProvider(BaseProvider):
             req["max_completion_tokens"] = req.pop("max_tokens")
 
         # Anthropic の `stop_sequences` は Chat Completions では `stop` という名前。
-        if "stop_sequences" in req and "stop" not in req:
-            req["stop"] = req.pop("stop_sequences")
-        else:
-            req.pop("stop_sequences", None)
+        # Azure/OpenAI は `stop` に list[str] を期待するため、上流の型ゆらぎ
+        # （string / list[non-str] / dict など）を正規化する。
+        stop_sequences = req.pop("stop_sequences", None)
+        if stop_sequences is not None:
+            if isinstance(stop_sequences, list) and all(isinstance(x, str) for x in stop_sequences):
+                # 上流（Claude互換クライアント）が `stop` トップレベルを既に指定している場合
+                # は上書きしない（＝既存値を優先）
+                req.setdefault("stop", stop_sequences)
+            else:
+                # `stop_sequences` が不正（list[str] ではない）場合は `stop` も落とす
+                req.pop("stop", None)
+        # stop_sequences が無い場合は `stop` を維持する（上流が正しい `stop` を指定している
+        # 可能性を残す）。
+
+        stop = req.get("stop")
+        if stop is not None:
+            # OpenAI/Azure は `stop` に list[str] を期待
+            if isinstance(stop, list) and all(isinstance(x, str) for x in stop):
+                pass
+            else:
+                req.pop("stop", None)
 
         # Anthropic の `top_k` は Chat Completions に相当するものがないため事前に削除する。
         # こうしないと、acreate の自動削除リトライが1往復かけて復旧することになる。
         req.pop("top_k", None)
+
+        # Anthropic の `context_management` は現状の bluellm では入力ポリフィルされず、
+        # OpenAI/Azure Chat Completions にそのまま渡すと SDK が TypeError で失敗するため削除する。
+        req.pop("context_management", None)
 
         # Anthropic の `thinking` は Chat Completions に相当するものがない。translator は
         # Claude 以外のモデル名に対してのみ `reasoning_effort` に変換するが、
@@ -157,6 +182,20 @@ class OpenAILikeProvider(BaseProvider):
         # モデルが拒否した未サポートパラメータを自動削除してリトライする。
         # モデルごとの対応表は不要。
         prepared = self._prepare(request)
+        # debug 用: upsteam が渡した候補パラメータの存在/型記録
+        logger.debug(
+            "Prepared request keys/types: stop=%r (%s) stop_sequences=%r (%s) thinking=%r (%s) reasoning_effort=%r (%s) stream=%r stream_options=%r",
+            type(prepared.get("stop")).__name__,
+            "present" if "stop" in prepared else None,
+            type(prepared.get("stop_sequences")).__name__ if "stop_sequences" in prepared else None,
+            "present" if "stop_sequences" in prepared else None,
+            type(prepared.get("thinking")).__name__ if "thinking" in prepared else None,
+            "present" if "thinking" in prepared else None,
+            type(prepared.get("reasoning_effort")).__name__ if "reasoning_effort" in prepared else None,
+            "present" if "reasoning_effort" in prepared else None,
+            "present" if "stream" in prepared else None,
+            "present" if "stream_options" in prepared else None,
+        )
         dropped: Set[str] = set()
         while True:
             try:
@@ -167,6 +206,14 @@ class OpenAILikeProvider(BaseProvider):
                     return self._shape_stream(openai_stream)
                 return await self._client.chat.completions.create(**prepared)
             except BadRequestError as e:
+                # unsupported パラメータ特定のため、例外本文も記録する
+                # 正常系: 未対応 param を落としてリトライするため、本文ログは通常出力に出さない
+                logger.debug(
+                    "BadRequestError from provider: %s (param=%r code=%r)",
+                    str(e),
+                    getattr(e, "param", None),
+                    getattr(e, "code", None),
+                )
                 param = self._droppable_param(e)
                 if (
                     param

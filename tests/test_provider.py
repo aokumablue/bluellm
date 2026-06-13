@@ -13,7 +13,7 @@ from __future__ import annotations
 import pytest
 
 from bluellm.config import ModelConfig
-from bluellm.providers.openai_like import OpenAILikeProvider
+from bluellm.providers.openai_like import AsyncAzureOpenAI, AsyncOpenAI, OpenAILikeProvider
 
 
 @pytest.fixture
@@ -166,6 +166,31 @@ def test_existing_stop_not_overwritten(provider):
     assert "stop_sequences" not in out
 
 
+def test_stop_top_level_dropped_when_no_stop_sequences(provider):
+    # M2: 上流が Chat Completions 用の `stop` を誤ってトップレベルで渡す場合
+    # Azure 側で 400 になりやすいため、`stop_sequences` が無ければ落とす。
+    req = {
+        "model": "claude-sonnet-4",
+        "max_tokens": 10,
+        "messages": [{"role": "user", "content": "hi"}],
+        "stop": "BREAK",
+    }
+    out = provider._prepare(req)
+    assert out.get("stop") is None
+
+
+def test_stop_sequences_wrong_type_is_dropped(provider):
+    # M2: `stop_sequences` は list[str] だけ有効。
+    req = {
+        "model": "claude-sonnet-4",
+        "max_tokens": 10,
+        "messages": [{"role": "user", "content": "hi"}],
+        "stop_sequences": "not-a-list",
+    }
+    out = provider._prepare(req)
+    assert out.get("stop") is None
+
+
 def test_top_k_dropped(provider):
     # H2: Anthropic `top_k` has no Chat Completions equivalent. Drop it in
     # _prepare so the upstream does not 400 and we avoid the auto-drop retry
@@ -178,6 +203,127 @@ def test_top_k_dropped(provider):
     }
     out = provider._prepare(req)
     assert "top_k" not in out
+
+
+def test_context_management_dropped(provider):
+    # Claude Code sends `context_management` on the Anthropic Messages surface,
+    # but the current upstream wire format is OpenAI/Azure Chat Completions,
+    # whose SDK method rejects it as an unexpected keyword argument.
+    req = {
+        "model": "claude-sonnet-4",
+        "max_tokens": 10,
+        "messages": [{"role": "user", "content": "hi"}],
+        "context_management": {"clear_function_results": True},
+    }
+    out = provider._prepare(req)
+    assert "context_management" not in out
+
+
+def test_build_client_azure_openai_v1_uses_async_openai(monkeypatch):
+    # Azure's OpenAI-compatible /openai/v1 endpoint should use the plain OpenAI client.
+    calls = {}
+
+    def fake_async_openai(**kwargs):
+        calls["async_openai"] = kwargs
+        return "openai-client"
+
+    def fake_async_azure_openai(**kwargs):
+        calls["async_azure_openai"] = kwargs
+        return "azure-client"
+
+    monkeypatch.setattr("bluellm.providers.openai_like.AsyncOpenAI", fake_async_openai)
+    monkeypatch.setattr(
+        "bluellm.providers.openai_like.AsyncAzureOpenAI", fake_async_azure_openai
+    )
+    mc = ModelConfig(
+        model_name="*",
+        provider="azure",
+        deployment="d",
+        api_base="https://example.openai.azure.com/openai/v1",
+        api_key="k",  # nosec - synthetic placeholder, not a real credential
+        api_version="2025-01-01-preview",
+    )
+
+    provider = OpenAILikeProvider(mc)
+
+    assert provider._client == "openai-client"
+    assert calls["async_openai"] == {
+        "api_key": "k",
+        "base_url": "https://example.openai.azure.com/openai/v1",
+    }
+    assert "async_azure_openai" not in calls
+
+
+def test_build_client_azure_deployments_base_url_still_uses_async_azure_openai(monkeypatch):
+    # Existing fully-qualified deployments URLs must keep using AsyncAzureOpenAI.
+    calls = {}
+
+    def fake_async_openai(**kwargs):
+        calls["async_openai"] = kwargs
+        return "openai-client"
+
+    def fake_async_azure_openai(**kwargs):
+        calls["async_azure_openai"] = kwargs
+        return "azure-client"
+
+    monkeypatch.setattr("bluellm.providers.openai_like.AsyncOpenAI", fake_async_openai)
+    monkeypatch.setattr(
+        "bluellm.providers.openai_like.AsyncAzureOpenAI", fake_async_azure_openai
+    )
+    mc = ModelConfig(
+        model_name="*",
+        provider="azure",
+        deployment="d",
+        api_base="https://example.openai.azure.com/openai/deployments/d",
+        api_key="k",  # nosec - synthetic placeholder, not a real credential
+        api_version="2025-01-01-preview",
+    )
+
+    provider = OpenAILikeProvider(mc)
+
+    assert provider._client == "azure-client"
+    assert calls["async_azure_openai"] == {
+        "api_key": "k",
+        "api_version": "2025-01-01-preview",
+        "base_url": "https://example.openai.azure.com/openai/deployments/d",
+    }
+    assert "async_openai" not in calls
+
+
+def test_build_client_azure_plain_endpoint_uses_async_azure_openai(monkeypatch):
+    # Legacy Azure endpoint routing must keep using AsyncAzureOpenAI with azure_endpoint.
+    calls = {}
+
+    def fake_async_openai(**kwargs):
+        calls["async_openai"] = kwargs
+        return "openai-client"
+
+    def fake_async_azure_openai(**kwargs):
+        calls["async_azure_openai"] = kwargs
+        return "azure-client"
+
+    monkeypatch.setattr("bluellm.providers.openai_like.AsyncOpenAI", fake_async_openai)
+    monkeypatch.setattr(
+        "bluellm.providers.openai_like.AsyncAzureOpenAI", fake_async_azure_openai
+    )
+    mc = ModelConfig(
+        model_name="*",
+        provider="azure",
+        deployment="d",
+        api_base="https://example.openai.azure.com",
+        api_key="k",  # nosec - synthetic placeholder, not a real credential
+        api_version="2025-01-01-preview",
+    )
+
+    provider = OpenAILikeProvider(mc)
+
+    assert provider._client == "azure-client"
+    assert calls["async_azure_openai"] == {
+        "api_key": "k",
+        "api_version": "2025-01-01-preview",
+        "azure_endpoint": "https://example.openai.azure.com",
+    }
+    assert "async_openai" not in calls
 
 
 def test_cache_key_excludes_plaintext_api_key():

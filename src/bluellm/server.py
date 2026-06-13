@@ -42,6 +42,11 @@ def create_app(config: Config) -> FastAPI:
         """認証不要の死活監視プローブ。"""
         return {"status": "ok"}
 
+    @app.api_route("/", methods=["GET", "HEAD"])
+    async def root():
+        """外部プローブ向けのルート応答。"""
+        return {"status": "ok"}
+
     @app.post("/v1/messages", dependencies=[Depends(require_auth)])
     async def messages(request: Request):
         """Anthropic Messages endpoint: リクエストを変換し、上流を呼び出し、レスポンスを変換する。

@@ -1,9 +1,11 @@
 """CLI (`python -m bluellm`) tests covering serve/encrypt/main and helpers."""
 
+import logging
 from types import SimpleNamespace
 
 import pytest
 import uvicorn
+import uvicorn.config
 from helpers import CONFIG_TEMPLATE, SALT_KEY
 
 import bluellm.__main__ as cli
@@ -31,7 +33,73 @@ def test_cmd_serve_starts_uvicorn_and_warns_when_open(tmp_path, monkeypatch, cap
     with caplog.at_level("WARNING"):
         assert cli._cmd_serve(args) == 0
     assert captured["host"] == "127.0.0.1"
-    assert any("UNAUTHENTICATED" in r.getMessage() for r in caplog.records)
+    assert captured["log_config"]["formatters"]["access"]["fmt"] == (
+        "%(levelprefix)s %(client_addr)s - %(request_line)s %(status_code)s"
+    )
+    assert any("未認証状態" in r.getMessage() for r in caplog.records)
+
+
+def test_httpx_formatter_unifies_prefix_and_colors_status():
+    formatter = cli._HttpxFormatter(use_colors=True)
+    record = logging.LogRecord(
+        name="httpx",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=1,
+        msg='HTTP Request: POST https://x "HTTP/1.1 200 OK"',
+        args=(),
+        exc_info=None,
+    )
+    rendered = formatter.format(record)
+    assert "\x1b[32mINFO:\x1b[0m httpx:" in rendered
+    assert '"HTTP/1.1 200 OK"' not in rendered
+    assert "HTTP/1.1 " in rendered
+    assert "\x1b[32m200 OK\x1b[0m" in rendered
+
+
+def test_httpx_formatter_without_color_is_plain_text():
+    formatter = cli._HttpxFormatter(use_colors=False)
+    record = logging.LogRecord(
+        name="httpx",
+        level=logging.WARNING,
+        pathname=__file__,
+        lineno=1,
+        msg='HTTP Request: POST https://x "HTTP/1.1 404 NOT FOUND"',
+        args=(),
+        exc_info=None,
+    )
+    rendered = formatter.format(record)
+    assert rendered.startswith("WARNING: httpx:")
+    assert "\x1b[" not in rendered
+
+
+def test_cmd_serve_sets_httpx_formatter_on_root_handlers(tmp_path, monkeypatch):
+    monkeypatch.setenv("AZURE_API_KEY", "azkey")
+    cfg = tmp_path / "config.yml"
+    cfg.write_text(CONFIG_TEMPLATE)
+    captured = {}
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kw: captured.update(kw))
+
+    root_logger = logging.getLogger()
+    original_handlers = list(root_logger.handlers)
+    try:
+        root_logger.handlers = [logging.StreamHandler()]
+        assert cli._cmd_serve(SimpleNamespace(config=str(cfg), host=None, port=None)) == 0
+        assert isinstance(root_logger.handlers[0].formatter, cli._HttpxFormatter)
+    finally:
+        root_logger.handlers = original_handlers
+
+
+def test_cmd_serve_deepcopies_uvicorn_log_config(tmp_path, monkeypatch):
+    monkeypatch.setenv("AZURE_API_KEY", "azkey")
+    cfg = tmp_path / "config.yml"
+    cfg.write_text(CONFIG_TEMPLATE)
+    captured = {}
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kw: captured.update(kw))
+
+    original_fmt = uvicorn.config.LOGGING_CONFIG["formatters"]["access"]["fmt"]
+    assert cli._cmd_serve(SimpleNamespace(config=str(cfg), host=None, port=None)) == 0
+    assert uvicorn.config.LOGGING_CONFIG["formatters"]["access"]["fmt"] == original_fmt
 
 
 def test_is_loopback_host():
@@ -56,7 +124,7 @@ def test_cmd_serve_refuses_unauthenticated_non_loopback(tmp_path, monkeypatch, c
     monkeypatch.setattr(uvicorn, "run", lambda app, **kw: started.update(kw))
     args = SimpleNamespace(config=str(cfg), host="0.0.0.0", port=None)
     assert cli._cmd_serve(args) == 1
-    assert "Refusing to start" in capsys.readouterr().err
+    assert "起動を拒否しました" in capsys.readouterr().err
     assert started == {}  # uvicorn never started
 
 
@@ -108,7 +176,7 @@ def test_cmd_encrypt_salt_from_config(tmp_path, monkeypatch, capsys):
 def test_cmd_encrypt_no_salt_returns_1(monkeypatch, capsys):
     monkeypatch.delenv("BLUELLM_SALT_KEY", raising=False)
     assert cli._cmd_encrypt(SimpleNamespace(config=None)) == 1
-    assert "No salt key" in capsys.readouterr().err
+    assert "salt キーが利用できません" in capsys.readouterr().err
 
 
 def test_cmd_encrypt_empty_value_returns_1(monkeypatch, capsys):

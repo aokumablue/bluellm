@@ -45,6 +45,13 @@ def test_health_no_auth(make_client):
     assert client.get("/health").json() == {"status": "ok"}
 
 
+
+def test_root_no_auth(make_client):
+    client = make_client(lambda **kw: None)
+    assert client.get("/").json() == {"status": "ok"}
+    assert client.head("/").status_code == 200
+
+
 def test_auth_required(make_client):
     async def create(**kw):
         return text_completion()
@@ -111,6 +118,27 @@ def test_auto_drop_unsupported_params(make_client):
     assert "temperature" not in calls[-1] and "top_p" not in calls[-1]
     # max_tokens was rewritten to max_completion_tokens and never dropped
     assert calls[-1]["max_completion_tokens"] == 50
+
+
+def test_context_management_stripped_before_upstream_call(make_client):
+    calls = []
+
+    async def create(**kw):
+        calls.append(dict(kw))
+        return text_completion(text="Hello there")
+
+    client = make_client(create)
+    r = client.post(
+        "/v1/messages",
+        headers=AUTH,
+        json={
+            **MSG,
+            "context_management": {"clear_function_results": True},
+        },
+    )
+    assert r.status_code == 200
+    assert calls
+    assert "context_management" not in calls[-1]
 
 
 def test_upstream_error_sanitized(make_client):
