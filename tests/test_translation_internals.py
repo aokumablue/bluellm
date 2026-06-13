@@ -257,6 +257,47 @@ def test_output_usage_cached_and_cache_creation():
     assert out["usage"]["cache_creation_input_tokens"] == 2
 
 
+def _legacy_usage_dict(usage):
+    """共通化前の usage 抽出ロジック（バイト等価性検証用の基準実装）。"""
+    uncached_input_tokens = usage.prompt_tokens or 0
+    cached_tokens = 0
+    if hasattr(usage, "prompt_tokens_details") and usage.prompt_tokens_details:
+        cached_tokens = getattr(usage.prompt_tokens_details, "cached_tokens", 0) or 0
+        uncached_input_tokens -= cached_tokens
+    result = {
+        "input_tokens": uncached_input_tokens,
+        "output_tokens": usage.completion_tokens or 0,
+    }
+    if (
+        hasattr(usage, "_cache_creation_input_tokens")
+        and usage._cache_creation_input_tokens > 0
+    ):
+        result["cache_creation_input_tokens"] = usage._cache_creation_input_tokens
+    if cached_tokens > 0:
+        result["cache_read_input_tokens"] = cached_tokens
+    return result
+
+
+@pytest.mark.parametrize(
+    "prompt,completion,cached,cache_creation",
+    [
+        (10, 3, 0, 0),  # キャッシュなし: 任意キー欠落
+        (10, 3, 4, 0),  # cache_read のみ
+        (10, 3, 0, 2),  # cache_creation のみ
+        (10, 3, 4, 2),  # 双方
+        (None, None, 0, 0),  # prompt/completion None -> 0 フォールバック
+    ],
+)
+def test_build_usage_dict_matches_legacy(prompt, completion, cached, cache_creation):
+    usage = _usage(
+        prompt=prompt, completion=completion, cached=cached, cache_creation=cache_creation
+    )
+    result = M._build_usage_dict(usage)
+    legacy = _legacy_usage_dict(usage)
+    assert result == legacy
+    assert set(result.keys()) == set(legacy.keys())  # キー集合の完全一致
+
+
 # ===========================================================================
 # Streaming chunk translation (lower-level helpers)
 # ===========================================================================

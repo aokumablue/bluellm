@@ -1429,6 +1429,36 @@ class BlueLLMMessagesAdapter:
         return tool_use_block.model_dump()
 
     @staticmethod
+    def _build_usage_dict(usage: Usage) -> Dict[str, int]:
+        """OpenAI の ``Usage`` を Anthropic 形式の usage dict に変換する。
+
+        ``input_tokens`` はキャッシュ済みtoken数を差し引いた値（``output_tokens`` と
+        ともに常に設定される）。``cache_creation_input_tokens`` / ``cache_read_input_tokens``
+        は対応する値が正の場合のみ設定する。``AnthropicUsage`` と ``UsageDelta`` の双方が
+        実行時 dict であり同一キー集合を持つため、両者で共用する。
+        """
+        uncached_input_tokens = usage.prompt_tokens or 0
+        cached_tokens = 0
+        if hasattr(usage, "prompt_tokens_details") and usage.prompt_tokens_details:
+            cached_tokens = (
+                getattr(usage.prompt_tokens_details, "cached_tokens", 0) or 0
+            )
+            uncached_input_tokens -= cached_tokens
+
+        result: Dict[str, int] = {
+            "input_tokens": uncached_input_tokens,
+            "output_tokens": usage.completion_tokens or 0,
+        }
+        if (
+            hasattr(usage, "_cache_creation_input_tokens")
+            and usage._cache_creation_input_tokens > 0
+        ):
+            result["cache_creation_input_tokens"] = usage._cache_creation_input_tokens
+        if cached_tokens > 0:
+            result["cache_read_input_tokens"] = cached_tokens
+        return result
+
+    @staticmethod
     def _translate_openai_finish_reason_to_anthropic(
         openai_finish_reason: str,
     ) -> AnthropicFinishReason:
@@ -1484,33 +1514,13 @@ class BlueLLMMessagesAdapter:
         )
         # usage を取得する
         usage: Usage = getattr(response, "usage")
-        uncached_input_tokens = usage.prompt_tokens or 0
-        cached_tokens = 0
-        if hasattr(usage, "prompt_tokens_details") and usage.prompt_tokens_details:
-            cached_tokens = (
-                getattr(usage.prompt_tokens_details, "cached_tokens", 0) or 0
-            )
-            uncached_input_tokens -= cached_tokens
-
-        anthropic_usage = AnthropicUsage(
-            input_tokens=uncached_input_tokens,
-            output_tokens=usage.completion_tokens or 0,
-        )
-        if (
-            hasattr(usage, "_cache_creation_input_tokens")
-            and usage._cache_creation_input_tokens > 0
-        ):
-            anthropic_usage["cache_creation_input_tokens"] = (
-                usage._cache_creation_input_tokens
-            )
-        if cached_tokens > 0:
-            anthropic_usage["cache_read_input_tokens"] = cached_tokens
+        anthropic_usage: AnthropicUsage = self._build_usage_dict(usage)  # type: ignore[assignment]
 
         if polyfill_result is not None and polyfill_result.iterations_usage is not None:
             message_iteration: UsageIteration = {
                 "type": "message",
-                "input_tokens": uncached_input_tokens,
-                "output_tokens": usage.completion_tokens or 0,
+                "input_tokens": anthropic_usage["input_tokens"],
+                "output_tokens": anthropic_usage["output_tokens"],
             }
             anthropic_usage["iterations"] = list(polyfill_result.iterations_usage) + [message_iteration]  # type: ignore[typeddict-unknown-key]
 
@@ -1722,35 +1732,7 @@ class BlueLLMMessagesAdapter:
             else:
                 usage_chunk = None
             if usage_chunk is not None:
-                uncached_input_tokens = usage_chunk.prompt_tokens or 0
-                cached_tokens = 0
-                if (
-                    hasattr(usage_chunk, "prompt_tokens_details")
-                    and usage_chunk.prompt_tokens_details
-                ):
-                    cached_tokens = (
-                        getattr(
-                            usage_chunk.prompt_tokens_details,
-                            "cached_tokens",
-                            0,
-                        )
-                        or 0
-                    )
-                    uncached_input_tokens -= cached_tokens
-
-                usage_delta = UsageDelta(
-                    input_tokens=uncached_input_tokens,
-                    output_tokens=usage_chunk.completion_tokens or 0,
-                )
-                if (
-                    hasattr(usage_chunk, "_cache_creation_input_tokens")
-                    and usage_chunk._cache_creation_input_tokens > 0
-                ):
-                    usage_delta["cache_creation_input_tokens"] = (
-                        usage_chunk._cache_creation_input_tokens
-                    )
-                if cached_tokens > 0:
-                    usage_delta["cache_read_input_tokens"] = cached_tokens
+                usage_delta: UsageDelta = self._build_usage_dict(usage_chunk)  # type: ignore[assignment]
             else:
                 usage_delta = UsageDelta(input_tokens=0, output_tokens=0)
             message_block = MessageBlockDelta(
