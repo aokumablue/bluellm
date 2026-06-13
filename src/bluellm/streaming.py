@@ -15,12 +15,14 @@ from typing import (
 
 from bluellm._compat import verbose_logger
 from bluellm._compat import uuid
-from bluellm.types.anthropic import (
+from bluellm.types.anthropic_context import (
     AppliedEdit,
     CompactionBlock,
     ContextManagementResponse,
-    UsageDelta,
     UsageIteration,
+)
+from bluellm.types.anthropic_streaming import (
+    UsageDelta,
 )
 from bluellm._compat import AdapterCompletionStreamWrapper
 
@@ -35,7 +37,7 @@ class BlueLLMStreamWrapper(AdapterCompletionStreamWrapper):
     - finish_reason は Anthropic の理由コードに正確にマッピングする必要がある（そうしないと Anthropic クライアントがパースできない）
     """
 
-    from bluellm.types.anthropic import (
+    from bluellm.types.anthropic_streaming import (
         ContentBlockContentBlockDict,
         ContentBlockStart,
         ContentBlockStartText,
@@ -705,7 +707,7 @@ class BlueLLMStreamWrapper(AdapterCompletionStreamWrapper):
             # 型の絞り込み: block_type が "tool_use" の場合、content_block_start は ToolUseBlock
             from typing import cast
 
-            from bluellm.types.anthropic import ToolUseBlock
+            from bluellm.types.anthropic_streaming import ToolUseBlock
 
             tool_block = cast(ToolUseBlock, content_block_start)
 

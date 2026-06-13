@@ -17,13 +17,17 @@ from bluellm.translation._tools import (
     _TRANSLATABLE_ANTHROPIC_PARAMS,
     truncate_tool_name,
 )
-from bluellm.types.anthropic import (
+from bluellm.types.anthropic_common import (
     ANTHROPIC_HOSTED_TOOLS,
-    AllAnthropicToolsValues,
+)
+from bluellm.types.anthropic_request import (
     AnthopicMessagesAssistantMessageParam,
     AnthropicMessagesRequest,
-    AnthropicMessagesToolChoice,
     AnthropicMessagesUserMessageParam,
+)
+from bluellm.types.anthropic_tools import (
+    AllAnthropicToolsValues,
+    AnthropicMessagesToolChoice,
 )
 from bluellm.types.openai import (
     AllMessageValues,

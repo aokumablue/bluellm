@@ -16,14 +16,16 @@ from openai.types.chat.chat_completion_chunk import Choice as OpenAIStreamingCho
 
 from bluellm._compat import THOUGHT_SIGNATURE_SEPARATOR
 from bluellm._compat import PolyfillResult
-from bluellm.types.anthropic import (
+from bluellm.types.anthropic_context import (
     AppliedEdit,
+    ContextManagementResponse,
+)
+from bluellm.types.anthropic_streaming import (
     ContentBlockDelta,
     ContentJsonBlockDelta,
     ContentTextBlockDelta,
     ContentThinkingBlockDelta,
     ContentThinkingSignatureBlockDelta,
-    ContextManagementResponse,
     MessageBlockDelta,
     MessageDelta,
     UsageDelta,
@@ -34,7 +36,7 @@ from bluellm.types.openai import (
 from bluellm._compat import ModelResponse, StreamingChoices, Usage
 
 if TYPE_CHECKING:
-    from bluellm.types.anthropic import ContentBlockContentBlockDict
+    from bluellm.types.anthropic_streaming import ContentBlockContentBlockDict
 
 
 class _StreamingTranslationMixin:
@@ -98,7 +100,7 @@ class _StreamingTranslationMixin:
         判断するために使用する ``(block_type, content_block_start)`` を返す。
         """
         from bluellm._compat import uuid
-        from bluellm.types.anthropic import TextBlock
+        from bluellm.types.anthropic_streaming import TextBlock
 
         for choice in choices:
             if (

@@ -8,17 +8,19 @@ from typing import (
 from bluellm._compat import parse_tool_call_arguments
 from bluellm._compat import THOUGHT_SIGNATURE_SEPARATOR
 from bluellm._compat import PolyfillResult
-from bluellm.types.anthropic import (
+from bluellm.types.anthropic_common import (
     AnthropicFinishReason,
+)
+from bluellm.types.anthropic_context import (
+    ContextManagementResponse,
+    UsageIteration,
+)
+from bluellm.types.anthropic_response import (
+    AnthropicMessagesResponse,
     AnthropicResponseContentBlockRedactedThinking,
     AnthropicResponseContentBlockText,
     AnthropicResponseContentBlockThinking,
     AnthropicResponseContentBlockToolUse,
-    ContextManagementResponse,
-    UsageIteration,
-)
-from bluellm.types.anthropic import (
-    AnthropicMessagesResponse,
     AnthropicUsage,
 )
 from bluellm._compat import Choices, ModelResponse, Usage
