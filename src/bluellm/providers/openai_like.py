@@ -206,11 +206,12 @@ class OpenAILikeProvider(BaseProvider):
                     return self._shape_stream(openai_stream)
                 return await self._client.chat.completions.create(**prepared)
             except BadRequestError as e:
-                # unsupported パラメータ特定のため、例外本文も記録する
-                # 正常系: 未対応 param を落としてリトライするため、本文ログは通常出力に出さない
+                # unsupported パラメータ特定のため type/param/code を記録する。
+                # str(e)（上流エラー本文）は redaction 未登録の動的シークレットを
+                # 含みうるため記録しない。param 削除リトライ判定は本文に依存しない。
                 logger.debug(
-                    "BadRequestError from provider: %s (param=%r code=%r)",
-                    str(e),
+                    "BadRequestError from provider (type=%s param=%r code=%r)",
+                    type(e).__name__,
                     getattr(e, "param", None),
                     getattr(e, "code", None),
                 )

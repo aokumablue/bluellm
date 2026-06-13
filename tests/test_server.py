@@ -254,3 +254,79 @@ def test_invalid_json_body_returns_anthropic_error(make_client):
     body = r.json()
     assert body["type"] == "error"
     assert body["error"]["type"] == "invalid_request_error"
+
+
+def test_unknown_model_404_body_omits_internal_detail(tmp_path, monkeypatch):
+    # S2-a: the 404 body must not leak routing internals (presence/absence of the
+    # '*' catch-all) nor echo back the client-sent model name. Status/type stay 404.
+    monkeypatch.setenv("AZURE_API_KEY", AZURE_KEY)
+    monkeypatch.setenv("BLUELLM_MASTER_KEY", MASTER_KEY)
+    no_wildcard = """
+models:
+  - name: "gpt-only"
+    params:
+      model: azure/gpt-5.4
+      endpoint: https://example.openai.azure.com
+      key: os.environ/AZURE_API_KEY
+      version: "2025-01-01-preview"
+generals:
+  key: os.environ/BLUELLM_MASTER_KEY
+"""
+    cfg = tmp_path / "config.yml"
+    cfg.write_text(no_wildcard)
+    install_fake_client(monkeypatch, lambda **kw: text_completion())
+    client = TestClient(create_app(load_config(str(cfg))))
+    r = client.post("/v1/messages", headers=AUTH, json={**MSG, "model": "claude-secret-xyz"})
+    assert r.status_code == 404
+    msg = r.json()["error"]["message"]
+    assert "catch-all" not in msg
+    assert "model_list" not in msg
+    assert "claude-secret-xyz" not in msg
+
+
+def test_unsupported_content_400_body_is_client_facing_only(make_client):
+    # S2-b: unsupported content is an explicit 400 describing the client's own
+    # input; it carries no internal config/path/upstream detail, so it is NOT a
+    # leak. This guards the current (correct) behavior against accidental change.
+    client = make_client(lambda **kw: text_completion())
+    bad = {
+        "model": "claude-x",
+        "max_tokens": 50,
+        "messages": [
+            {"role": "user", "content": [{"type": "image", "source": "not-an-object"}]}
+        ],
+    }
+    r = client.post("/v1/messages", headers=AUTH, json=bad)
+    assert r.status_code == 400
+    body = r.json()
+    assert body["error"]["type"] == "invalid_request_error"
+    # client-facing description of the offending input is retained
+    assert "image source" in body["error"]["message"]
+    # no internal leakage
+    assert "azure.com" not in body["error"]["message"]
+    assert "/home/" not in body["error"]["message"]
+    assert "Traceback" not in body["error"]["message"]
+
+
+def test_badrequest_debug_log_omits_raw_body(make_client, caplog):
+    # S3: the provider's BadRequestError debug log must carry type/param/code, not
+    # the raw str(e) body, which can contain dynamic secrets absent from the
+    # redaction set. Diagnostic param/code must still be present.
+    async def create(**kw):
+        if "temperature" in kw:
+            e = BadRequestError.__new__(BadRequestError)
+            e.param = "temperature"
+            e.code = "unsupported_value"
+            e.args = ("Unsupported value SECRETBODYMARKER token=sk-leaked",)
+            raise e
+        return text_completion()
+
+    client = make_client(create)
+    with caplog.at_level("DEBUG", logger="bluellm"):
+        r = client.post("/v1/messages", headers=AUTH, json={**MSG, "temperature": 0.7})
+    assert r.status_code == 200
+    debug_text = " ".join(rec.getMessage() for rec in caplog.records)
+    assert "SECRETBODYMARKER" not in debug_text
+    assert "sk-leaked" not in debug_text
+    # diagnostic param/code retained for unsupported-param identification
+    assert "temperature" in debug_text

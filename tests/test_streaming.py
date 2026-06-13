@@ -177,6 +177,37 @@ def test_stream_raw_empty_choices_usage_only_does_not_crash():
     assert '"output_tokens": 2' in body
 
 
+def test_stream_empty_chunk_after_usage_merge_is_dropped():
+    # streaming.py:430,433 — a no-choices/no-usage chunk arriving after the usage
+    # has already been merged & queued contributes nothing to the Anthropic SSE
+    # order and is dropped (queued_usage_chunk True branch).
+    body = _async_collect_raw(
+        [
+            stream_chunk(content="hi"),
+            stream_chunk(finish_reason="stop"),
+            usage_only_chunk(usage(8, 2)),
+            SimpleNamespace(id="c1", model="gpt-5.4", choices=[], usage=None),
+        ]
+    )
+    assert body.count("event: message_stop") == 1
+    assert '"input_tokens": 8' in body
+
+
+def test_stream_empty_chunk_without_pending_usage_is_dropped():
+    # streaming.py:434 — a no-choices/no-usage chunk with nothing held and no
+    # queued usage yields no event and is skipped without affecting the stream.
+    body = _async_collect_raw(
+        [
+            SimpleNamespace(id="c1", model="gpt-5.4", choices=[], usage=None),
+            stream_chunk(content="hi"),
+            stream_chunk(finish_reason="stop"),
+            usage_only_chunk(usage(8, 2)),
+        ]
+    )
+    assert body.count("event: message_stop") == 1
+    assert "hi" in body
+
+
 def test_should_start_new_block_empty_choices_returns_false():
     assert BlueLLMStreamWrapper(
         completion_stream=iter([]), model="m", tool_name_mapping={}

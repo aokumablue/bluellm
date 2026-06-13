@@ -64,7 +64,10 @@ def create_app(config: Config) -> FastAPI:
         try:
             model_config = request.app.state.router.resolve(body.get("model", ""))
         except KeyError as e:
-            return _anthropic_error(404, "not_found_error", str(e))
+            # 本文に routing 内部構成（'*' catch-all の有無）やクライアント送信の
+            # model 名を漏らさない。診断用の詳細はサーバーログにのみ残す。
+            logger.info("Model routing failed: %s", e)
+            return _anthropic_error(404, "not_found_error", "model not found")
 
         try:
             is_stream, payload = await handler.process(body, model_config)

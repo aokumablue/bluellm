@@ -67,9 +67,9 @@ class _HttpxFormatter(logging.Formatter):
         def _paint_status(match: re.Match[str]) -> str:
             code = int(match.group(1))
             status = match.group(0)
-            color = self._STATUS_COLORS.get(code // 100)
-            if color is None:
-                return status
+            # 正規表現 [1-5]\d\d により code//100 は必ず 1..5 で、_STATUS_COLORS が
+            # 全キーを持つため None にはならない。
+            color = self._STATUS_COLORS[code // 100]
             return f"{color}{status}{self._RESET}"
 
         return re.sub(r"\b([1-5]\d\d) [A-Z][A-Z ]*\b", _paint_status, message)
