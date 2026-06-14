@@ -187,3 +187,93 @@ def test_no_usage_logger_is_noop(monkeypatch):
     )
     assert is_stream is False
     assert payload["usage"] == {"input_tokens": 12, "output_tokens": 7}
+
+
+class _RecordingBalancer:
+    """report_success/report_failure の呼び出しを (kind, deployment) で記録するスタブ。"""
+
+    def __init__(self):
+        self.events = []
+
+    def report_success(self, mc):
+        self.events.append(("success", mc.deployment))
+
+    def report_failure(self, mc):
+        self.events.append(("failure", mc.deployment))
+
+
+def test_balancer_report_success_on_nonstream(monkeypatch):
+    async def create(**kw):
+        return text_completion()
+
+    install_fake_client(monkeypatch, create)
+    bal = _RecordingBalancer()
+    asyncio.run(handler.process(_BODY, [_mc("primary", "primary-dep")], None, balancer=bal))
+    assert bal.events == [("success", "primary-dep")]
+
+
+def test_balancer_report_success_on_stream(monkeypatch):
+    async def create(**kw):
+        async def gen():
+            yield stream_chunk(content="Hi")
+            yield stream_chunk(finish_reason="stop")
+            yield usage_only_chunk(usage(8, 2))
+
+        return gen()
+
+    install_fake_client(monkeypatch, create)
+    bal = _RecordingBalancer()
+    is_stream, payload = asyncio.run(
+        handler.process({**_BODY, "stream": True}, [_mc("primary", "primary-dep")], None, balancer=bal)
+    )
+    asyncio.run(_drain(payload))
+    # ストリーム成功でも report_success は確定後 1 回だけ呼ばれる。
+    assert bal.events == [("success", "primary-dep")]
+
+
+def test_balancer_report_failure_then_success_on_rotate(monkeypatch):
+    # retryable 失敗 → report_failure → 次候補成功で report_success。
+    async def create(**kw):
+        if kw["model"] == "primary-dep":
+            raise InternalServerError("ise", response=_response(500), body=None)
+        return text_completion()
+
+    install_fake_client(monkeypatch, create)
+    bal = _RecordingBalancer()
+    asyncio.run(
+        handler.process(
+            _BODY,
+            [_mc("primary", "primary-dep"), _mc("secondary", "secondary-dep")],
+            None,
+            balancer=bal,
+        )
+    )
+    assert bal.events == [("failure", "primary-dep"), ("success", "secondary-dep")]
+
+
+def test_balancer_no_report_on_client_error(monkeypatch):
+    # 非 retryable（400）はクライアント起因 → ブレーカに計上しない。
+    async def create(**kw):
+        raise BadRequestError("bad", response=_response(400), body=None)
+
+    install_fake_client(monkeypatch, create)
+    bal = _RecordingBalancer()
+    with pytest.raises(BadRequestError):
+        asyncio.run(
+            handler.process(_BODY, [_mc("primary", "primary-dep")], None, balancer=bal)
+        )
+    assert bal.events == []
+
+
+def test_balancer_report_failure_on_last_candidate(monkeypatch):
+    # 最終候補が retryable 失敗 → report_failure は呼ぶが success はなく送出する。
+    async def create(**kw):
+        raise InternalServerError("ise", response=_response(500), body=None)
+
+    install_fake_client(monkeypatch, create)
+    bal = _RecordingBalancer()
+    with pytest.raises(InternalServerError):
+        asyncio.run(
+            handler.process(_BODY, [_mc("primary", "primary-dep")], None, balancer=bal)
+        )
+    assert bal.events == [("failure", "primary-dep")]

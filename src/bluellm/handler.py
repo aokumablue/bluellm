@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Any, AsyncIterator, Dict, List, Optional, Tuple, Union
 
+from bluellm.balancer import EndpointBalancer
 from bluellm.config import ModelConfig
 from bluellm.cost import UsageLogger, endpoint_host
 from bluellm.observability import NOOP_SPAN
@@ -22,6 +23,7 @@ async def process(
     model_configs: List[ModelConfig],
     usage_logger: Optional[UsageLogger] = None,
     span: Any = NOOP_SPAN,
+    balancer: Optional[EndpointBalancer] = None,
 ) -> Tuple[bool, Union[Dict[str, Any], AsyncIterator[bytes]]]:
     """(is_stream, payload) を返す。
 
@@ -33,6 +35,9 @@ async def process(
     （非ストリームは即時、ストリームは最終 usage 確定時のコールバック経由）。
     ``span`` には成功候補の provider/model/fallback 有無・トークン数を記録する
     （OTel 無効時は :data:`NOOP_SPAN` で no-op）。
+    ``balancer`` 指定時、成功で ``report_success``・retryable 失敗で
+    ``report_failure`` を呼びサーキットブレーカへ反映する（非 retryable な
+    クライアント起因エラーはブレーカに計上しない）。
 
     payload は非ストリーム時は Anthropic Messages レスポンス dict、
     ストリーム時は SSE バイトチャンクの非同期イテレーター。
@@ -53,11 +58,19 @@ async def process(
                 model_config.retry,
             )
         except Exception as exc:
-            # retryable かつ後続候補があれば fallback、それ以外（恒久エラー・
-            # 最終候補）は送出する。
-            if is_retryable(exc) and index < last_index:
-                continue
+            # retryable 失敗のみブレーカへ計上する（非 retryable=クライアント起因は
+            # 計上しない）。retryable かつ後続候補があれば fallback、それ以外
+            # （恒久エラー・最終候補）は送出する。
+            if is_retryable(exc):
+                if balancer is not None:
+                    balancer.report_failure(model_config)
+                if index < last_index:
+                    continue
             raise
+
+        # 成功確定 → ブレーカの失敗・除外状態をリセットする。
+        if balancer is not None:
+            balancer.report_success(model_config)
 
         # 成功した候補の属性を span に記録する（OTel 無効時は no-op）。
         span.set("bluellm.provider", model_config.provider)

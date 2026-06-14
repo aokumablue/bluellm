@@ -11,6 +11,7 @@ from openai import APIStatusError
 
 from bluellm import handler
 from bluellm.auth import Authenticator, require_auth
+from bluellm.balancer import EndpointBalancer
 from bluellm.config import Config, ModelConfig
 from bluellm.cost import UsageLogger
 from bluellm.middleware import allowlist_middleware, runaway_guard_middleware
@@ -24,26 +25,29 @@ logger = logging.getLogger("bluellm")
 _MAX_FALLBACK_CHAIN = 5
 
 
-def _resolve_fallback_chain(router: Router, model_name: str) -> list[ModelConfig]:
-    """``model_name`` を起点に ``fallback_to`` を辿って ModelConfig 連鎖を構築する。
+def build_candidates(
+    balancer: EndpointBalancer, model_name: str
+) -> list[ModelConfig]:
+    """``model_name`` を起点に ``fallback_to`` を辿って候補 ModelConfig 連鎖を構築する。
 
-    各モデル名は複数エンドポイント（グループ）を持ちうるため、解決した
-    グループの全エンドポイントを順次フラット展開して連鎖へ追加する（現時点では
-    RR なし）。先頭が primary、以降が fallback。``visited`` は**モデル名**で
-    管理して循環を防ぎ、``_MAX_FALLBACK_CHAIN`` で**モデル連鎖長**を上限化する。
+    各モデル名は複数エンドポイント（グループ）を持ちうるため、``balancer.select``
+    でラウンドロビン順かつサーキットブレーカ除外を反映した healthy エンドポイント
+    群を取得し、順次フラット展開して連鎖へ追加する。先頭が primary、以降が
+    fallback。``visited`` は**モデル名**で管理して循環を防ぎ、
+    ``_MAX_FALLBACK_CHAIN`` で**モデル連鎖長**を上限化する。
     起点の解決失敗（KeyError）は呼び出し元へ伝播させる。
     """
     chain: list[ModelConfig] = []
     visited: set[str] = set()
-    group = router.resolve(model_name)
+    selected = balancer.select(model_name)
     while True:
-        chain.extend(group)
-        visited.add(group[0].model_name)
-        nxt = group[0].fallback_to
+        chain.extend(selected)
+        visited.add(selected[0].model_name)
+        nxt = selected[0].fallback_to
         if not nxt or nxt in visited or len(visited) >= _MAX_FALLBACK_CHAIN:
             return chain
         try:
-            group = router.resolve(nxt)
+            selected = balancer.select(nxt)
         except KeyError:
             # 設定ミスの fallback_to は無視し、それまでの連鎖で続行する。
             logger.info("Fallback target %r not found; stopping chain", nxt)
@@ -66,10 +70,17 @@ def create_app(config: Config) -> FastAPI:
     """
     app = FastAPI(title="bluellm", docs_url=None, redoc_url=None)
     app.state.config = config
-    app.state.router = Router(config)
+    router = Router(config)
+    app.state.router = router
     app.state.authenticator = Authenticator(config.general_settings.master_key)
     # usage トークン記録（常時有効・固定の日次 JSONL へ追記）。
     app.state.usage_logger = UsageLogger()
+    # エンドポイント単位の RR ＋サーキットブレーカを担うバランサ。
+    app.state.balancer = EndpointBalancer(
+        router,
+        config.general_settings.circuit_breaker_threshold,
+        config.general_settings.circuit_breaker_ttl_seconds,
+    )
 
     max_bytes = config.general_settings.max_request_body_mb * 1024 * 1024
 
@@ -119,8 +130,8 @@ def create_app(config: Config) -> FastAPI:
                 400, "invalid_request_error", "request body is not valid JSON"
             )
         try:
-            model_configs = _resolve_fallback_chain(
-                request.app.state.router, body.get("model", "")
+            model_configs = build_candidates(
+                request.app.state.balancer, body.get("model", "")
             )
         except KeyError as e:
             # 本文に routing 内部構成（'*' catch-all の有無）やクライアント送信の
@@ -134,7 +145,11 @@ def create_app(config: Config) -> FastAPI:
         ) as span:
             try:
                 is_stream, payload = await handler.process(
-                    body, model_configs, request.app.state.usage_logger, span
+                    body,
+                    model_configs,
+                    request.app.state.usage_logger,
+                    span,
+                    request.app.state.balancer,
                 )
             except UnsupportedContentError as e:
                 # クライアントがプロキシで変換できないコンテンツブロックを送信した

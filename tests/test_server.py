@@ -358,69 +358,97 @@ def test_badrequest_debug_log_omits_raw_body(make_client, caplog):
     assert "temperature" in debug_text
 
 
-# --- fallback chain (_resolve_fallback_chain) -------------------------------
+# --- candidate chain (build_candidates) -------------------------------------
 
+from bluellm.balancer import EndpointBalancer  # noqa: E402
 from bluellm.config import Config, GeneralSettings, ModelConfig  # noqa: E402
 from bluellm.router import Router  # noqa: E402
-from bluellm.server import _MAX_FALLBACK_CHAIN, _resolve_fallback_chain  # noqa: E402
+from bluellm.server import _MAX_FALLBACK_CHAIN, build_candidates  # noqa: E402
 
 
 def _router(*mcs):
     return Router(Config(model_list=list(mcs), general_settings=GeneralSettings()))
 
 
+def _balancer(*mcs, threshold=3, ttl=30.0):
+    return EndpointBalancer(_router(*mcs), threshold, ttl)
+
+
 def test_chain_single_model_when_no_fallback():
     a = ModelConfig("a", "azure", "da")
-    chain = _resolve_fallback_chain(_router(a), "a")
+    chain = build_candidates(_balancer(a), "a")
     assert [m.model_name for m in chain] == ["a"]
 
 
 def test_chain_follows_fallback_to():
     a = ModelConfig("a", "azure", "da", fallback_to="b")
     b = ModelConfig("b", "azure", "db")
-    chain = _resolve_fallback_chain(_router(a, b), "a")
+    chain = build_candidates(_balancer(a, b), "a")
     assert [m.model_name for m in chain] == ["a", "b"]
 
 
 def test_chain_stops_on_missing_target():
     a = ModelConfig("a", "azure", "da", fallback_to="ghost")
-    chain = _resolve_fallback_chain(_router(a), "a")
+    chain = build_candidates(_balancer(a), "a")
     assert [m.model_name for m in chain] == ["a"]
 
 
 def test_chain_prevents_cycle():
     a = ModelConfig("a", "azure", "da", fallback_to="b")
     b = ModelConfig("b", "azure", "db", fallback_to="a")
-    chain = _resolve_fallback_chain(_router(a, b), "a")
+    chain = build_candidates(_balancer(a, b), "a")
     assert [m.model_name for m in chain] == ["a", "b"]
 
 
 def test_chain_respects_max_length():
     links = [("a", "b"), ("b", "c"), ("c", "d"), ("d", "e"), ("e", "f"), ("f", None)]
     mcs = [ModelConfig(n, "azure", "d" + n, fallback_to=nxt) for n, nxt in links]
-    chain = _resolve_fallback_chain(_router(*mcs), "a")
+    chain = build_candidates(_balancer(*mcs), "a")
     assert len(chain) == _MAX_FALLBACK_CHAIN
 
 
 def test_chain_flattens_group_endpoints():
     # 同一モデルの複数エンドポイントは全件フラット展開され、fallback 先も展開する。
-    a1 = ModelConfig("a", "azure", "da1", fallback_to="b")
-    a2 = ModelConfig("a", "azure", "da2", fallback_to="ignored")
-    b1 = ModelConfig("b", "azure", "db1")
-    b2 = ModelConfig("b", "azure", "db2")
-    chain = _resolve_fallback_chain(_router(a1, a2, b1, b2), "a")
-    assert [m.deployment for m in chain] == ["da1", "da2", "db1", "db2"]
+    a1 = ModelConfig("a", "azure", "da1", "https://a1", fallback_to="b")
+    a2 = ModelConfig("a", "azure", "da2", "https://a2", fallback_to="ignored")
+    b1 = ModelConfig("b", "azure", "db1", "https://b1")
+    b2 = ModelConfig("b", "azure", "db2", "https://b2")
+    chain = build_candidates(_balancer(a1, a2, b1, b2), "a")
+    assert sorted(m.deployment for m in chain) == ["da1", "da2", "db1", "db2"]
 
 
 def test_chain_max_length_counts_models_not_endpoints():
     # 上限はモデル連鎖長で判定する（同一モデルの複数エンドポイントは 1 とみなす）。
-    a1 = ModelConfig("a", "azure", "da1", fallback_to="b")
-    a2 = ModelConfig("a", "azure", "da2")
+    a1 = ModelConfig("a", "azure", "da1", "https://a1", fallback_to="b")
+    a2 = ModelConfig("a", "azure", "da2", "https://a2")
     links = [("b", "c"), ("c", "d"), ("d", "e"), ("e", "f"), ("f", None)]
     rest = [ModelConfig(n, "azure", "d" + n, fallback_to=nxt) for n, nxt in links]
-    chain = _resolve_fallback_chain(_router(a1, a2, *rest), "a")
+    chain = build_candidates(_balancer(a1, a2, *rest), "a")
     # 5 モデル（a..e）まで辿り、a は 2 エンドポイントなので合計 6 エントリ。
     assert [m.model_name for m in chain] == ["a", "a", "b", "c", "d", "e"]
+
+
+def test_chain_rotates_round_robin_across_calls():
+    # 同一モデルに 2 エンドポイント → 連続呼び出しで開始エンドポイントが交互に入替。
+    a1 = ModelConfig("a", "azure", "da1", "https://a1")
+    a2 = ModelConfig("a", "azure", "da2", "https://a2")
+    bal = _balancer(a1, a2)
+    first = build_candidates(bal, "a")
+    second = build_candidates(bal, "a")
+    assert first[0].deployment != second[0].deployment
+    assert {first[0].deployment, second[0].deployment} == {"da1", "da2"}
+
+
+def test_chain_excludes_endpoint_after_breaker_trips():
+    # 閾値回 retryable 失敗したエンドポイントは以後の候補から除外される。
+    a1 = ModelConfig("a", "azure", "da1", "https://a1")
+    a2 = ModelConfig("a", "azure", "da2", "https://a2")
+    bal = _balancer(a1, a2, threshold=2)
+    bal.report_failure(a1)
+    bal.report_failure(a1)  # 閾値到達 → da1 を TTL 除外
+    for _ in range(4):
+        chain = build_candidates(bal, "a")
+        assert [m.deployment for m in chain] == ["da2"]
 
 
 def test_server_falls_back_to_secondary_on_500(tmp_path, monkeypatch):
@@ -471,3 +499,39 @@ generals:
     r = client.post("/v1/messages", headers=AUTH, json=MSG)
     assert r.status_code == 200
     assert seen == ["primary", "backup-dep"]
+
+
+def test_server_round_robins_across_endpoints(tmp_path, monkeypatch):
+    # 同一モデルに 2 エンドポイント → 連続リクエストで開始エンドポイントが交互入替（E2E）。
+    monkeypatch.setenv("AZURE_API_KEY", AZURE_KEY)
+    monkeypatch.setenv("BLUELLM_MASTER_KEY", MASTER_KEY)
+    cfg_text = """
+models:
+  - name: "claude-x"
+    params:
+      - model: azure/dep-a
+        endpoint: https://a.openai.azure.com
+        key: os.environ/AZURE_API_KEY
+        version: "v"
+      - model: azure/dep-b
+        endpoint: https://b.openai.azure.com
+        key: os.environ/AZURE_API_KEY
+        version: "v"
+generals:
+  key: os.environ/BLUELLM_MASTER_KEY
+"""
+    cfg = tmp_path / "config.yml"
+    cfg.write_text(cfg_text)
+
+    seen = []
+
+    async def create(**kw):
+        seen.append(kw["model"])
+        return text_completion()
+
+    install_fake_client(monkeypatch, create)
+    client = TestClient(create_app(load_config(str(cfg))))
+    assert client.post("/v1/messages", headers=AUTH, json=MSG).status_code == 200
+    assert client.post("/v1/messages", headers=AUTH, json=MSG).status_code == 200
+    # 各リクエストは開始エンドポイント（=実際に呼ばれた最初）が交互に入れ替わる。
+    assert seen == ["dep-a", "dep-b"]
