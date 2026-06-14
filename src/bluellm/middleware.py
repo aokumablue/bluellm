@@ -1,36 +1,32 @@
-"""HTTP 境界の防御 middleware: トークンバケットによるレート制限と CIDR allowlist。
+"""HTTP 境界の防御 middleware: 単一グローバルの runaway ガードと CIDR allowlist。
 
 いずれも標準ライブラリのみで実装する。
 
-- レート制限は寛容な既定値で常時 ON とし、単一ユーザー（Claude Code）の通常利用を
-  妨げず runaway のみ抑止する。
+- runaway ガードはプロセス全体で 1 個のトークンバケットを共有し、寛容な既定値で
+  常時 ON とする。単一ユーザー（Claude Code）の通常利用を妨げず、暴走（runaway）の
+  みを抑止する。per-token のバケット分割やキー別の課金は行わない。
 - allowlist は既定空リスト＝全許可（既存挙動と等価）。明示的に CIDR を設定した
   ときだけブロックする。
 
 ``/health`` / ``/`` は認証不要プローブなので境界チェックもバイパスする。
 
 レスポンス生成（Anthropic エラー形式）は ``server`` 側から builder を注入して
-循環 import を避ける。``TokenBucket.take`` / バケット辞書操作は同期かつ ``await`` を
-含まないため、単一イベントループ上ではアトミックでロック不要。
+循環 import を避ける。``TokenBucket.take`` は同期かつ ``await`` を含まないため、
+単一イベントループ上ではアトミックでロック不要。
 """
 
 from __future__ import annotations
 
-import hashlib
 import ipaddress
 import math
 import time
-from collections import OrderedDict
-from typing import Callable, List, Optional, Tuple
+from typing import Callable, List, Tuple
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
 
 # health / root は認証不要プローブなので境界チェックをバイパスする。
 _BYPASS_PATHS = frozenset({"/health", "/"})
-
-# per-token バケットのメモリ有界化（LRU 上限）。
-_MAX_BUCKETS = 1024
 
 # Anthropic エラー JSON を生成する builder（server._anthropic_error）の型。
 ErrorBuilder = Callable[[int, str, str], JSONResponse]
@@ -67,50 +63,26 @@ class TokenBucket:
         return False, retry_after
 
 
-def _extract_token(request: Request) -> Optional[str]:
-    """``x-api-key`` または ``Authorization: Bearer`` からトークンを取り出す。"""
-    api_key = request.headers.get("x-api-key")
-    if api_key:
-        return api_key
-    auth = request.headers.get("authorization")
-    if auth and auth.lower().startswith("bearer "):
-        return auth[len("bearer ") :]
-    return None
+def runaway_guard_middleware(rps: float, error_builder: ErrorBuilder) -> Callable:
+    """単一グローバルの runaway ガード dispatch を生成する。
 
-
-def _rate_key(request: Request, per_token: bool) -> str:
-    """レート制限のバケットキーを決定する（per-token 時はトークンのハッシュ）。"""
-    if per_token:
-        token = _extract_token(request)
-        if token:
-            return "tok:" + hashlib.sha256(token.encode()).hexdigest()
-    return "global"
-
-
-def rate_limit_middleware(
-    rps: float, burst: int, per_token: bool, error_builder: ErrorBuilder
-) -> Callable:
-    """トークンバケットによるレート制限 dispatch を生成する。
+    プロセス全体で 1 個のトークンバケットを共有し、``rps`` トークン/秒で補充する。
+    バケット容量（burst）は config では公開せず内部既定とする。``rps`` と同
+    オーダーの ``burst = max(1, math.ceil(rps))`` を採用するのは、これが
+    「単一ユーザー（Claude Code）を妨げず暴走のみ抑止する」という寛容な目的に
+    合致するため。短時間のバースト（瞬間的に rps を超える連続リクエスト）は許容
+    しつつ、持続的な暴走だけを定常レート ``rps`` で頭打ちにする。``max(1, ...)``
+    は ``rps`` が 0 でも最低 1 トークンを確保し、初回リクエストを通す。
 
     超過時は 429（``rate_limit_error``）に ``Retry-After`` ヘッダーを付けて返す。
     """
-    buckets: "OrderedDict[str, TokenBucket]" = OrderedDict()
-
-    def _bucket_for(key: str) -> TokenBucket:
-        bucket = buckets.get(key)
-        if bucket is None:
-            bucket = TokenBucket(rps, burst)
-            buckets[key] = bucket
-            if len(buckets) > _MAX_BUCKETS:
-                buckets.popitem(last=False)
-        else:
-            buckets.move_to_end(key)
-        return bucket
+    burst = max(1, math.ceil(rps))
+    bucket = TokenBucket(rps, burst)
 
     async def dispatch(request: Request, call_next):
         if request.url.path in _BYPASS_PATHS:
             return await call_next(request)
-        allowed, retry_after = _bucket_for(_rate_key(request, per_token)).take()
+        allowed, retry_after = bucket.take()
         if not allowed:
             resp = error_builder(429, "rate_limit_error", "rate limit exceeded")
             resp.headers["Retry-After"] = str(max(1, math.ceil(retry_after)))

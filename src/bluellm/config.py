@@ -70,8 +70,9 @@ class ModelConfig:
 class GeneralSettings:
     """サーバー全体の設定: 認証・暗号鍵、host/port、ボディ上限、HTTP 境界防御。
 
-    レート制限は寛容な既定値で常時 ON（単一ユーザーを妨げず runaway のみ抑止）、
-    allowlist は既定空＝全許可（既存挙動と等価）。
+    runaway ガードは単一グローバルのトークンバケットで暴走のみ抑止する（寛容な
+    既定値で常時 ON・単一ユーザーを妨げない）、allowlist は既定空＝全許可
+    （既存挙動と等価）。
     """
 
     master_key: Optional[str] = None
@@ -79,9 +80,7 @@ class GeneralSettings:
     host: str = "127.0.0.1"
     port: int = 4000
     max_request_body_mb: int = 10
-    rate_limit_rps: float = 100.0
-    rate_limit_burst: int = 200
-    rate_limit_per_token: bool = False
+    runaway_guard_rps: float = 200.0
     allowlist_cidrs: List[str] = field(default_factory=list)
     otel_disabled: bool = False
     otel_endpoint: str = "http://127.0.0.1:4318/v1/traces"
@@ -274,9 +273,7 @@ def load_config(path: str) -> Config:
         host=gs_raw.get("host", "127.0.0.1"),
         port=int(gs_raw.get("port", 4000)),
         max_request_body_mb=int(gs_raw.get("max_request_body_mb", 10)),
-        rate_limit_rps=float(gs_raw.get("rate_limit_rps", 100.0)),
-        rate_limit_burst=int(gs_raw.get("rate_limit_burst", 200)),
-        rate_limit_per_token=bool(gs_raw.get("rate_limit_per_token", False)),
+        runaway_guard_rps=float(gs_raw.get("runaway_guard_rps", 200.0)),
         allowlist_cidrs=_validate_allowlist_cidrs(gs_raw.get("allowlist_cidrs")),
         otel_disabled=bool(gs_raw.get("otel_disabled", False)),
         otel_endpoint=gs_raw.get(

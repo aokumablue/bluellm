@@ -251,9 +251,7 @@ def test_http_boundary_defaults(tmp_path, monkeypatch):
     monkeypatch.setenv("BLUELLM_MASTER_KEY", MASTER_KEY)
     cfg = load_config(_write(tmp_path, "os.environ/AZURE_API_KEY"))
     gs = cfg.general_settings
-    assert gs.rate_limit_rps == 100.0
-    assert gs.rate_limit_burst == 200
-    assert gs.rate_limit_per_token is False
+    assert gs.runaway_guard_rps == 200.0
     assert gs.allowlist_cidrs == []
 
 
@@ -269,9 +267,7 @@ models:
       version: "v"
 generals:
   key: os.environ/BLUELLM_MASTER_KEY
-  rate_limit_rps: 5
-  rate_limit_burst: 10
-  rate_limit_per_token: true
+  runaway_guard_rps: 5
   allowlist_cidrs:
     - 10.0.0.0/8
     - 192.168.0.0/16
@@ -280,9 +276,7 @@ generals:
     p.write_text(cfg_text)
     cfg = load_config(str(p))
     gs = cfg.general_settings
-    assert gs.rate_limit_rps == 5.0
-    assert gs.rate_limit_burst == 10
-    assert gs.rate_limit_per_token is True
+    assert gs.runaway_guard_rps == 5.0
     assert gs.allowlist_cidrs == ["10.0.0.0/8", "192.168.0.0/16"]
 
 

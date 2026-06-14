@@ -13,7 +13,7 @@ from bluellm import handler
 from bluellm.auth import Authenticator, require_auth
 from bluellm.config import Config, ModelConfig
 from bluellm.cost import UsageLogger
-from bluellm.middleware import allowlist_middleware, rate_limit_middleware
+from bluellm.middleware import allowlist_middleware, runaway_guard_middleware
 from bluellm.observability import request_span
 from bluellm.router import Router
 from bluellm.translation import UnsupportedContentError
@@ -84,15 +84,10 @@ def create_app(config: Config) -> FastAPI:
 
     gs = config.general_settings
     # middleware は後に登録したものが最外（先に実行）になる。実行順を
-    # allowlist -> rate limit -> body size とするため、body size の後に
-    # rate limit、最後に allowlist を登録する。
+    # allowlist -> runaway guard -> body size とするため、body size の後に
+    # runaway guard、最後に allowlist を登録する。
     app.middleware("http")(
-        rate_limit_middleware(
-            gs.rate_limit_rps,
-            gs.rate_limit_burst,
-            gs.rate_limit_per_token,
-            _anthropic_error,
-        )
+        runaway_guard_middleware(gs.runaway_guard_rps, _anthropic_error)
     )
     app.middleware("http")(allowlist_middleware(gs.allowlist_cidrs, _anthropic_error))
 

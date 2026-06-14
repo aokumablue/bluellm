@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse
 from bluellm.middleware import (
     TokenBucket,
     allowlist_middleware,
-    rate_limit_middleware,
+    runaway_guard_middleware,
 )
 
 
@@ -75,11 +75,12 @@ def test_token_bucket_retry_after_when_rps_zero():
     assert allowed is False and retry_after == 1.0
 
 
-# --- rate limit -------------------------------------------------------------
+# --- runaway guard ----------------------------------------------------------
 
 
 def test_rate_limit_blocks_when_exhausted():
-    disp = rate_limit_middleware(rps=0.0, burst=1, per_token=False, error_builder=_err)
+    # rps=0.0 → burst=max(1, ceil(0))=1。1 回目 OK・2 回目で枯渇して 429。
+    disp = runaway_guard_middleware(rps=0.0, error_builder=_err)
     req = _Request()
     assert _run(disp, req) == "OK"
     resp = _run(disp, req)
@@ -88,39 +89,9 @@ def test_rate_limit_blocks_when_exhausted():
 
 
 def test_rate_limit_bypasses_health():
-    disp = rate_limit_middleware(rps=0.0, burst=0, per_token=False, error_builder=_err)
+    disp = runaway_guard_middleware(rps=0.0, error_builder=_err)
     assert _run(disp, _Request(path="/health")) == "OK"
     assert _run(disp, _Request(path="/")) == "OK"
-
-
-def test_rate_limit_per_token_separate_buckets():
-    disp = rate_limit_middleware(rps=0.0, burst=1, per_token=True, error_builder=_err)
-    assert _run(disp, _Request(headers={"x-api-key": "A"})) == "OK"
-    assert _run(disp, _Request(headers={"x-api-key": "B"})) == "OK"
-    blocked = _run(disp, _Request(headers={"x-api-key": "A"}))
-    assert isinstance(blocked, JSONResponse) and blocked.status_code == 429
-
-
-def test_rate_limit_per_token_bearer_header():
-    disp = rate_limit_middleware(rps=0.0, burst=1, per_token=True, error_builder=_err)
-    assert _run(disp, _Request(headers={"authorization": "Bearer XYZ"})) == "OK"
-    blocked = _run(disp, _Request(headers={"authorization": "Bearer XYZ"}))
-    assert blocked.status_code == 429
-
-
-def test_rate_limit_per_token_falls_back_to_global_without_token():
-    disp = rate_limit_middleware(rps=0.0, burst=1, per_token=True, error_builder=_err)
-    assert _run(disp, _Request(headers={})) == "OK"
-    blocked = _run(disp, _Request(headers={}))
-    assert blocked.status_code == 429
-
-
-def test_rate_limit_lru_eviction(monkeypatch):
-    # バケット辞書がメモリ無制限に育たないことを確認（LRU 上限で古いものを退避）。
-    monkeypatch.setattr("bluellm.middleware._MAX_BUCKETS", 2)
-    disp = rate_limit_middleware(rps=100.0, burst=100, per_token=True, error_builder=_err)
-    for tok in ("A", "B", "C"):
-        assert _run(disp, _Request(headers={"x-api-key": tok})) == "OK"
 
 
 # --- IP allowlist -----------------------------------------------------------
