@@ -1,0 +1,95 @@
+# bluellm 設定ファイル例 — 複数エンドポイントによるラウンドロビン負荷分散
+#
+# 使い方:
+#   cp config.yml.example config.yml   # 値を自分の環境に合わせて編集
+#   bluellm serve --config config.yml  # 環境変数 BLUELLM_CONFIG でパス上書き可
+#
+# シークレットの解決方法（key / endpoint などに指定可能）:
+#   os.environ/NAME … 環境変数 NAME を参照（.env.example 参照）
+#   encrypted:<b64> … generals.salt / BLUELLM_SALT_KEY で復号した値を使う
+#   平文            … そのまま使う（非推奨。漏洩リスク）
+#
+# モデル解決: 受信モデル名の完全一致 → 無ければ name: "*"（キャッチオール）。
+
+models:
+  # ── 複数エンドポイント ─────────────────────────────────────────────
+  # params を「リスト」にすると、同一モデルを複数バックエンドへ
+  # ラウンドロビンで分散する。各リクエストは次のエンドポイントへ回り、
+  # 連続失敗したエンドポイントはサーキットブレーカで一時除外される。
+  - name: "claude-sonnet-4-6"
+    params:
+      - model: openai/gpt-4o          # provider/deployment（provider 省略時は openai）
+        endpoint: https://node-a.internal:8001/v1
+        key: os.environ/OPENAI_API_KEY_A
+      - model: openai/gpt-4o
+        endpoint: https://node-b.internal:8001/v1
+        key: os.environ/OPENAI_API_KEY_B
+      - model: openai/gpt-4o
+        endpoint: https://node-c.internal:8001/v1
+        key: os.environ/OPENAI_API_KEY_C
+
+  # ── 複数エンドポイント + リトライ + フォールバック ────────────────
+  # retry はエンドポイントごとに指定可能。fallback_to はモデル名レベルの
+  # 概念で、リスト形式では「先頭要素」の値がグループ全体に適用される。
+  - name: "gpt-4o-azure"
+    params:
+      - model: azure/gpt-4o
+        endpoint: https://eastus.openai.azure.com/v1
+        key: os.environ/AZURE_API_KEY_EASTUS
+        version: "2025-01-01-preview"
+        retry:
+          max_attempts: 3
+          initial_backoff_ms: 200
+          max_backoff_ms: 5000
+          jitter_ratio: 0.2
+        fallback_to: "*"            # 全エンドポイント失敗時は "*" へフェイルオーバー
+      - model: azure/gpt-4o
+        endpoint: https://westus.openai.azure.com/v1
+        key: os.environ/AZURE_API_KEY_WESTUS
+        version: "2025-01-01-preview"
+
+  # ── 単一エンドポイント（従来構文・dict）も併用可能 ────────────────
+  - name: "local-llama"
+    params:
+      model: ollama/llama3.1
+      endpoint: http://127.0.0.1:11434/v1   # ローカル(loopback)は ollama のみ許可
+      extra_params:
+        reasoning_effort: medium            # リクエストにマージされる任意パラメータ
+
+  # ── キャッチオール: 未知のモデル名をここへルーティング ───────────
+  - name: "*"
+    params:
+      model: azure/gpt-4o
+      endpoint: https://eastus.openai.azure.com/v1
+      key: os.environ/AZURE_API_KEY_EASTUS
+      version: "2025-01-01-preview"
+
+generals:
+  # 認証: クライアントが提示する master key（16文字以上。例: openssl rand -base64 24）。
+  # ローカル単一利用なら省略可（その場合は認証なし）。
+  key: os.environ/BLUELLM_MASTER_KEY
+  # encrypted: 値の復号に使う salt key（暗号化設定値を使う場合のみ必須・16文字以上）。
+  salt: os.environ/BLUELLM_SALT_KEY
+
+  host: 127.0.0.1
+  port: 8888
+  max_request_body_mb: 10                   # リクエストボディ上限（MB）
+
+  # 暴走ループ抑止（front-door の単一グローバル runaway ガード・req/s 上限）。
+  # 寛容な既定値で常時 ON。単一ユーザーの通常利用は妨げない。
+  runaway_guard_rps: 200.0
+
+  # エンドポイント単位サーキットブレーカ:
+  #   連続失敗が threshold 回に達したエンドポイントを ttl 秒だけ候補から除外する。
+  circuit_breaker_threshold: 3
+  circuit_breaker_ttl_seconds: 30.0
+
+  # IP allowlist（CIDR のリスト。空＝全許可）。直接 peer のみ判定。
+  allowlist_cidrs: []
+  #   - 127.0.0.1/32
+  #   - 10.0.0.0/8
+
+  # OpenTelemetry トレース（任意依存・既定で有効）。無効化は otel_disabled: true。
+  otel_disabled: false
+  otel_endpoint: "http://127.0.0.1:4318/v1/traces"
+  otel_service_name: "bluellm"
