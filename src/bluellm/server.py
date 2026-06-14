@@ -12,6 +12,7 @@ from openai import APIStatusError
 from bluellm import handler
 from bluellm.auth import Authenticator, require_auth
 from bluellm.config import Config, ModelConfig
+from bluellm.middleware import allowlist_middleware, rate_limit_middleware
 from bluellm.router import Router
 from bluellm.translation import UnsupportedContentError
 
@@ -76,6 +77,20 @@ def create_app(config: Config) -> FastAPI:
         if cl is not None and cl.isdigit() and int(cl) > max_bytes:
             return _anthropic_error(413, "invalid_request_error", "request body too large")
         return await call_next(request)
+
+    gs = config.general_settings
+    # middleware は後に登録したものが最外（先に実行）になる。実行順を
+    # allowlist -> rate limit -> body size とするため、body size の後に
+    # rate limit、最後に allowlist を登録する。
+    app.middleware("http")(
+        rate_limit_middleware(
+            gs.rate_limit_rps,
+            gs.rate_limit_burst,
+            gs.rate_limit_per_token,
+            _anthropic_error,
+        )
+    )
+    app.middleware("http")(allowlist_middleware(gs.allowlist_cidrs, _anthropic_error))
 
     @app.get("/health")
     async def health():

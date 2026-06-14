@@ -68,13 +68,21 @@ class ModelConfig:
 
 @dataclass
 class GeneralSettings:
-    """サーバー全体の設定: 認証 master key、暗号化 salt key、host、port、リクエストボディ上限。"""
+    """サーバー全体の設定: 認証・暗号鍵、host/port、ボディ上限、HTTP 境界防御。
+
+    レート制限は寛容な既定値で常時 ON（単一ユーザーを妨げず runaway のみ抑止）、
+    allowlist は既定空＝全許可（既存挙動と等価）。
+    """
 
     master_key: Optional[str] = None
     salt_key: Optional[str] = None
     host: str = "127.0.0.1"
     port: int = 4000
     max_request_body_mb: int = 10
+    rate_limit_rps: float = 100.0
+    rate_limit_burst: int = 200
+    rate_limit_per_token: bool = False
+    allowlist_cidrs: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -145,6 +153,28 @@ def _validate_api_base(api_base: Any, *, allow_local: bool = False) -> Any:
             "to use it as an upstream (SSRF / metadata-endpoint defense)"
         )
     return api_base
+
+
+def _validate_allowlist_cidrs(value: Any) -> List[str]:
+    """``generals.allowlist_cidrs`` を検証して CIDR 文字列リストに正規化する。
+
+    各要素を ``ipaddress.ip_network`` でパースして不正な CIDR を起動時に弾く
+    （誤設定による全拒否や無効ルールの黙殺を防ぐ）。``None``/未指定は空リスト。
+    """
+    if not value:
+        return []
+    if not isinstance(value, list):
+        raise ValueError("generals.allowlist_cidrs must be a list of CIDR strings")
+    import ipaddress
+
+    cidrs: List[str] = []
+    for entry in value:
+        try:
+            ipaddress.ip_network(str(entry), strict=False)
+        except ValueError as e:
+            raise ValueError(f"invalid CIDR in allowlist_cidrs: {entry!r}") from e
+        cidrs.append(str(entry))
+    return cidrs
 
 
 _MIN_MASTER_KEY_LENGTH = 16
@@ -241,6 +271,10 @@ def load_config(path: str) -> Config:
         host=gs_raw.get("host", "127.0.0.1"),
         port=int(gs_raw.get("port", 4000)),
         max_request_body_mb=int(gs_raw.get("max_request_body_mb", 10)),
+        rate_limit_rps=float(gs_raw.get("rate_limit_rps", 100.0)),
+        rate_limit_burst=int(gs_raw.get("rate_limit_burst", 200)),
+        rate_limit_per_token=bool(gs_raw.get("rate_limit_per_token", False)),
+        allowlist_cidrs=_validate_allowlist_cidrs(gs_raw.get("allowlist_cidrs")),
     )
 
     model_list: List[ModelConfig] = []

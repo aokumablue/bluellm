@@ -246,6 +246,87 @@ generals:
         load_config(str(p))
 
 
+def test_http_boundary_defaults(tmp_path, monkeypatch):
+    monkeypatch.setenv("AZURE_API_KEY", AZURE_KEY)
+    monkeypatch.setenv("BLUELLM_MASTER_KEY", MASTER_KEY)
+    cfg = load_config(_write(tmp_path, "os.environ/AZURE_API_KEY"))
+    gs = cfg.general_settings
+    assert gs.rate_limit_rps == 100.0
+    assert gs.rate_limit_burst == 200
+    assert gs.rate_limit_per_token is False
+    assert gs.allowlist_cidrs == []
+
+
+def test_http_boundary_parsed(tmp_path, monkeypatch):
+    monkeypatch.setenv("BLUELLM_MASTER_KEY", MASTER_KEY)
+    cfg_text = """
+models:
+  - name: "*"
+    params:
+      model: azure/gpt-5.4
+      endpoint: https://example.openai.azure.com
+      key: plaintext-key
+      version: "v"
+generals:
+  key: os.environ/BLUELLM_MASTER_KEY
+  rate_limit_rps: 5
+  rate_limit_burst: 10
+  rate_limit_per_token: true
+  allowlist_cidrs:
+    - 10.0.0.0/8
+    - 192.168.0.0/16
+"""
+    p = tmp_path / "config.yml"
+    p.write_text(cfg_text)
+    cfg = load_config(str(p))
+    gs = cfg.general_settings
+    assert gs.rate_limit_rps == 5.0
+    assert gs.rate_limit_burst == 10
+    assert gs.rate_limit_per_token is True
+    assert gs.allowlist_cidrs == ["10.0.0.0/8", "192.168.0.0/16"]
+
+
+def test_invalid_cidr_rejected(tmp_path, monkeypatch):
+    monkeypatch.setenv("BLUELLM_MASTER_KEY", MASTER_KEY)
+    cfg_text = """
+models:
+  - name: "*"
+    params:
+      model: azure/gpt-5.4
+      endpoint: https://example.openai.azure.com
+      key: plaintext-key
+      version: "v"
+generals:
+  key: os.environ/BLUELLM_MASTER_KEY
+  allowlist_cidrs:
+    - not-a-cidr
+"""
+    p = tmp_path / "config.yml"
+    p.write_text(cfg_text)
+    with pytest.raises(ValueError):
+        load_config(str(p))
+
+
+def test_allowlist_must_be_list(tmp_path, monkeypatch):
+    monkeypatch.setenv("BLUELLM_MASTER_KEY", MASTER_KEY)
+    cfg_text = """
+models:
+  - name: "*"
+    params:
+      model: azure/gpt-5.4
+      endpoint: https://example.openai.azure.com
+      key: plaintext-key
+      version: "v"
+generals:
+  key: os.environ/BLUELLM_MASTER_KEY
+  allowlist_cidrs: "10.0.0.0/8"
+"""
+    p = tmp_path / "config.yml"
+    p.write_text(cfg_text)
+    with pytest.raises(ValueError):
+        load_config(str(p))
+
+
 def test_malformed_config_schema_rejected(tmp_path, monkeypatch):
     # M10: an unknown top-level key (e.g. a typo) fails loudly at load.
     monkeypatch.setenv("BLUELLM_MASTER_KEY", MASTER_KEY)
