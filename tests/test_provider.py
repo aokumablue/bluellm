@@ -13,7 +13,8 @@ from __future__ import annotations
 import pytest
 
 from bluellm.config import ModelConfig
-from bluellm.providers.openai_like import AsyncAzureOpenAI, AsyncOpenAI, OpenAILikeProvider
+from bluellm.providers.openai_like import OpenAILikeProvider
+from bluellm.reliability import RetryPolicy
 
 
 @pytest.fixture
@@ -320,6 +321,7 @@ def test_build_client_azure_openai_v1_uses_async_openai(monkeypatch):
     assert calls["async_openai"] == {
         "api_key": "k",
         "base_url": "https://example.openai.azure.com/openai/v1",
+        "max_retries": 0,
     }
     assert "async_azure_openai" not in calls
 
@@ -356,6 +358,7 @@ def test_build_client_azure_deployments_base_url_still_uses_async_azure_openai(m
         "api_key": "k",
         "api_version": "2025-01-01-preview",
         "base_url": "https://example.openai.azure.com/openai/deployments/d",
+        "max_retries": 0,
     }
     assert "async_openai" not in calls
 
@@ -392,6 +395,7 @@ def test_build_client_azure_plain_endpoint_uses_async_azure_openai(monkeypatch):
         "api_key": "k",
         "api_version": "2025-01-01-preview",
         "azure_endpoint": "https://example.openai.azure.com",
+        "max_retries": 0,
     }
     assert "async_openai" not in calls
 
@@ -422,6 +426,7 @@ def test_build_client_ollama_uses_async_openai_with_defaults(monkeypatch):
     assert calls["async_openai"] == {
         "api_key": "ollama",
         "base_url": "http://localhost:11434/v1",
+        "max_retries": 0,
     }
 
 
@@ -448,6 +453,7 @@ def test_build_client_ollama_honors_explicit_endpoint_and_key(monkeypatch):
     assert calls["async_openai"] == {
         "api_key": "tok",
         "base_url": "http://ollama.internal:11434/v1",
+        "max_retries": 0,
     }
 
 
@@ -466,6 +472,75 @@ def test_get_provider_accepts_ollama(monkeypatch):
     )
     provider = get_provider(mc)
     assert isinstance(provider, OpenAILikeProvider)
+
+
+def test_build_client_includes_timeout_when_set(monkeypatch):
+    # timeout を設定したモデルは openai クライアントへ timeout を渡す。
+    # max_retries は常に 0（リトライは reliability に一本化）。
+    calls = {}
+
+    def fake_async_openai(**kwargs):
+        calls.update(kwargs)
+        return "openai-client"
+
+    monkeypatch.setattr("bluellm.providers.openai_like.AsyncOpenAI", fake_async_openai)
+    mc = ModelConfig(
+        model_name="*",
+        provider="openai",
+        deployment="gpt-5.4",
+        api_base=None,
+        api_key="k",  # nosec - synthetic placeholder
+        api_version=None,
+        timeout=42.0,
+    )
+    OpenAILikeProvider(mc)
+    assert calls["max_retries"] == 0
+    assert calls["timeout"] == 42.0
+
+
+def test_build_client_omits_timeout_when_unset(monkeypatch):
+    # timeout 未設定なら timeout kwarg を渡さない（SDK 既定タイムアウトを維持）。
+    calls = {}
+
+    def fake_async_openai(**kwargs):
+        calls.update(kwargs)
+        return "openai-client"
+
+    monkeypatch.setattr("bluellm.providers.openai_like.AsyncOpenAI", fake_async_openai)
+    mc = ModelConfig(
+        model_name="*",
+        provider="openai",
+        deployment="gpt-5.4",
+        api_base=None,
+        api_key="k",  # nosec - synthetic placeholder
+        api_version=None,
+    )
+    OpenAILikeProvider(mc)
+    assert "timeout" not in calls
+    assert calls["max_retries"] == 0
+
+
+def test_cache_key_differs_by_timeout_and_retry():
+    # 接続挙動に影響する timeout / retry が異なれば別クライアントを返す。
+    from bluellm.providers.openai_like import _cache_key
+
+    def mc(**over):
+        base = dict(
+            model_name="*",
+            provider="openai",
+            deployment="d",
+            api_base="https://x",
+            api_key="k",  # nosec - synthetic placeholder
+            api_version="v",
+        )
+        base.update(over)
+        return ModelConfig(**base)
+
+    k_base = _cache_key(mc())
+    assert _cache_key(mc(timeout=10.0)) != k_base
+    assert _cache_key(mc(retry=RetryPolicy(max_attempts=9))) != k_base
+    # 同一設定は同一キー（共有される）。
+    assert _cache_key(mc()) == k_base
 
 
 def test_cache_key_excludes_plaintext_api_key():

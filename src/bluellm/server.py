@@ -11,11 +11,37 @@ from openai import APIStatusError
 
 from bluellm import handler
 from bluellm.auth import Authenticator, require_auth
-from bluellm.config import Config
+from bluellm.config import Config, ModelConfig
 from bluellm.router import Router
 from bluellm.translation import UnsupportedContentError
 
 logger = logging.getLogger("bluellm")
+
+# fallback 連鎖の最大長（暴走・過剰フェイルオーバーの安全上限）。
+_MAX_FALLBACK_CHAIN = 5
+
+
+def _resolve_fallback_chain(router: Router, model_name: str) -> list[ModelConfig]:
+    """``model_name`` を起点に ``fallback_to`` を辿って ModelConfig 連鎖を構築する。
+
+    先頭が primary、以降が fallback。``visited`` で循環を防ぎ、``_MAX_FALLBACK_CHAIN``
+    で長さを上限化する。起点の解決失敗（KeyError）は呼び出し元へ伝播させる。
+    """
+    chain: list[ModelConfig] = []
+    visited: set[str] = set()
+    mc = router.resolve(model_name)
+    while True:
+        chain.append(mc)
+        visited.add(mc.model_name)
+        nxt = mc.fallback_to
+        if not nxt or nxt in visited or len(chain) >= _MAX_FALLBACK_CHAIN:
+            return chain
+        try:
+            mc = router.resolve(nxt)
+        except KeyError:
+            # 設定ミスの fallback_to は無視し、それまでの連鎖で続行する。
+            logger.info("Fallback target %r not found; stopping chain", nxt)
+            return chain
 
 
 def _anthropic_error(status_code: int, err_type: str, message: str) -> JSONResponse:
@@ -76,7 +102,9 @@ def create_app(config: Config) -> FastAPI:
                 400, "invalid_request_error", "request body is not valid JSON"
             )
         try:
-            model_config = request.app.state.router.resolve(body.get("model", ""))
+            model_configs = _resolve_fallback_chain(
+                request.app.state.router, body.get("model", "")
+            )
         except KeyError as e:
             # 本文に routing 内部構成（'*' catch-all の有無）やクライアント送信の
             # model 名を漏らさない。診断用の詳細はサーバーログにのみ残す。
@@ -84,7 +112,7 @@ def create_app(config: Config) -> FastAPI:
             return _anthropic_error(404, "not_found_error", "model not found")
 
         try:
-            is_stream, payload = await handler.process(body, model_config)
+            is_stream, payload = await handler.process(body, model_configs)
         except UnsupportedContentError as e:
             # クライアントがプロキシで変換できないコンテンツブロックを送信した場合
             # （例: サポートされていない画像ソース）は、暗黙的に破棄せず拒否する。

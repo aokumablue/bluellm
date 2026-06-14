@@ -95,9 +95,22 @@ class OpenAILikeProvider(BaseProvider):
         self.mc = model_config
         self._client = self._build_client()
 
+    def _reliability_kwargs(self) -> Dict[str, Any]:
+        """全クライアント共通の信頼性 kwargs を返す。
+
+        リトライは :mod:`bluellm.reliability` に一本化するため SDK 内蔵リトライを
+        ``max_retries=0`` で無効化する（二重リトライ防止）。``timeout`` は設定時のみ
+        付与する（未設定なら openai SDK の既定タイムアウトを維持し既存挙動を壊さない）。
+        """
+        kwargs: Dict[str, Any] = {"max_retries": 0}
+        if self.mc.timeout is not None:
+            kwargs["timeout"] = self.mc.timeout
+        return kwargs
+
     def _build_client(self):
         """設定から AsyncAzureOpenAI / AsyncOpenAI クライアントを構築する。"""
         mc = self.mc
+        rk = self._reliability_kwargs()
         if mc.provider == "ollama":
             # Ollama は OpenAI 互換エンドポイント（/v1/chat/completions）を公開する。
             # API キーは不要だが openai SDK が非空値を要求するためダミーを既定にする。
@@ -105,15 +118,17 @@ class OpenAILikeProvider(BaseProvider):
             return AsyncOpenAI(
                 api_key=mc.api_key or "ollama",
                 base_url=mc.api_base or "http://localhost:11434/v1",
+                **rk,
             )
         if mc.provider == "azure":
             # Azure OpenAI の ``.../openai/v1`` は正式な OpenAI-compatible endpoint なので、
             # OpenAI client をそのまま使う。
             if mc.api_base and "/openai/v1" in mc.api_base:
-                return AsyncOpenAI(api_key=mc.api_key, base_url=mc.api_base)
+                return AsyncOpenAI(api_key=mc.api_key, base_url=mc.api_base, **rk)
             params: Dict[str, Any] = {
                 "api_key": mc.api_key,
                 "api_version": mc.api_version,
+                **rk,
             }
             # /openai/deployments を含む api_base は完全な base_url であり、
             # azure_endpoint ではない。
@@ -122,7 +137,7 @@ class OpenAILikeProvider(BaseProvider):
             else:
                 params["azure_endpoint"] = mc.api_base
             return AsyncAzureOpenAI(**params)
-        return AsyncOpenAI(api_key=mc.api_key, base_url=mc.api_base or None)
+        return AsyncOpenAI(api_key=mc.api_key, base_url=mc.api_base or None, **rk)
 
     def _prepare(self, request: Dict[str, Any]) -> Dict[str, Any]:
         """翻訳済みリクエストをこの deployment の Chat Completions 呼び出しに適合させる。
@@ -325,6 +340,10 @@ def _cache_key(mc: ModelConfig) -> tuple:
         mc.api_base,
         key_fingerprint,
         mc.api_version,
+        # timeout / retry も接続挙動に影響するため、設定差で別クライアントを返す。
+        # （frozen dataclass の RetryPolicy はハッシュ可能なのでそのまま使える）
+        mc.timeout,
+        mc.retry,
     )
 
 

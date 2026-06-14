@@ -3,6 +3,7 @@ from helpers import AZURE_KEY, MASTER_KEY, SALT_KEY
 
 from bluellm import crypto
 from bluellm.config import load_config
+from bluellm.reliability import DEFAULT_RETRY_POLICY, RetryPolicy
 from bluellm.router import Router
 
 SCHEMA = """
@@ -135,6 +136,74 @@ def test_endpoint_loopback_ip_rejected(tmp_path, monkeypatch):
     p.write_text(bad)
     with pytest.raises(ValueError):
         load_config(str(p))
+
+
+def test_reliability_params_default_when_unset(tmp_path, monkeypatch):
+    # timeout/retry/fallback_to を書かないモデルは既存挙動相当の既定になる。
+    monkeypatch.setenv("AZURE_API_KEY", AZURE_KEY)
+    monkeypatch.setenv("BLUELLM_MASTER_KEY", MASTER_KEY)
+    cfg = load_config(_write(tmp_path, "os.environ/AZURE_API_KEY"))
+    mc = cfg.model_list[0]
+    assert mc.timeout is None
+    assert mc.fallback_to is None
+    assert mc.retry == DEFAULT_RETRY_POLICY
+
+
+def test_reliability_params_parsed(tmp_path, monkeypatch):
+    monkeypatch.setenv("BLUELLM_MASTER_KEY", MASTER_KEY)
+    cfg_text = """
+models:
+  - name: "primary"
+    params:
+      model: azure/gpt-5.4
+      endpoint: https://example.openai.azure.com
+      key: plaintext-key
+      version: "v"
+      request_timeout_seconds: 30
+      fallback_to: backup
+      retry:
+        max_attempts: 5
+        initial_backoff_ms: 200
+        max_backoff_ms: 4000
+        jitter_ratio: 0.1
+generals:
+  key: os.environ/BLUELLM_MASTER_KEY
+"""
+    p = tmp_path / "config.yml"
+    p.write_text(cfg_text)
+    cfg = load_config(str(p))
+    mc = cfg.model_list[0]
+    assert mc.timeout == 30.0
+    assert mc.fallback_to == "backup"
+    assert mc.retry == RetryPolicy(
+        max_attempts=5, initial_backoff_ms=200, max_backoff_ms=4000, jitter_ratio=0.1
+    )
+
+
+def test_retry_partial_override_keeps_defaults(tmp_path, monkeypatch):
+    # retry の一部キーのみ指定 → 残りは DEFAULT_RETRY_POLICY を引き継ぐ。
+    monkeypatch.setenv("BLUELLM_MASTER_KEY", MASTER_KEY)
+    cfg_text = """
+models:
+  - name: "*"
+    params:
+      model: azure/gpt-5.4
+      endpoint: https://example.openai.azure.com
+      key: plaintext-key
+      version: "v"
+      retry:
+        max_attempts: 7
+generals:
+  key: os.environ/BLUELLM_MASTER_KEY
+"""
+    p = tmp_path / "config.yml"
+    p.write_text(cfg_text)
+    cfg = load_config(str(p))
+    mc = cfg.model_list[0]
+    assert mc.retry.max_attempts == 7
+    assert mc.retry.initial_backoff_ms == DEFAULT_RETRY_POLICY.initial_backoff_ms
+    assert mc.retry.max_backoff_ms == DEFAULT_RETRY_POLICY.max_backoff_ms
+    assert mc.retry.jitter_ratio == DEFAULT_RETRY_POLICY.jitter_ratio
 
 
 def test_ollama_loopback_endpoint_allowed(tmp_path, monkeypatch):

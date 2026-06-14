@@ -1,3 +1,4 @@
+import httpx
 import pytest
 from helpers import (
     AZURE_KEY,
@@ -355,3 +356,97 @@ def test_badrequest_debug_log_omits_raw_body(make_client, caplog):
     assert "sk-leaked" not in debug_text
     # diagnostic param/code retained for unsupported-param identification
     assert "temperature" in debug_text
+
+
+# --- fallback chain (_resolve_fallback_chain) -------------------------------
+
+from bluellm.config import Config, GeneralSettings, ModelConfig  # noqa: E402
+from bluellm.router import Router  # noqa: E402
+from bluellm.server import _MAX_FALLBACK_CHAIN, _resolve_fallback_chain  # noqa: E402
+
+
+def _router(*mcs):
+    return Router(Config(model_list=list(mcs), general_settings=GeneralSettings()))
+
+
+def test_chain_single_model_when_no_fallback():
+    a = ModelConfig("a", "azure", "da")
+    chain = _resolve_fallback_chain(_router(a), "a")
+    assert [m.model_name for m in chain] == ["a"]
+
+
+def test_chain_follows_fallback_to():
+    a = ModelConfig("a", "azure", "da", fallback_to="b")
+    b = ModelConfig("b", "azure", "db")
+    chain = _resolve_fallback_chain(_router(a, b), "a")
+    assert [m.model_name for m in chain] == ["a", "b"]
+
+
+def test_chain_stops_on_missing_target():
+    a = ModelConfig("a", "azure", "da", fallback_to="ghost")
+    chain = _resolve_fallback_chain(_router(a), "a")
+    assert [m.model_name for m in chain] == ["a"]
+
+
+def test_chain_prevents_cycle():
+    a = ModelConfig("a", "azure", "da", fallback_to="b")
+    b = ModelConfig("b", "azure", "db", fallback_to="a")
+    chain = _resolve_fallback_chain(_router(a, b), "a")
+    assert [m.model_name for m in chain] == ["a", "b"]
+
+
+def test_chain_respects_max_length():
+    links = [("a", "b"), ("b", "c"), ("c", "d"), ("d", "e"), ("e", "f"), ("f", None)]
+    mcs = [ModelConfig(n, "azure", "d" + n, fallback_to=nxt) for n, nxt in links]
+    chain = _resolve_fallback_chain(_router(*mcs), "a")
+    assert len(chain) == _MAX_FALLBACK_CHAIN
+
+
+def test_server_falls_back_to_secondary_on_500(tmp_path, monkeypatch):
+    # primary が 5xx → secondary へフェイルオーバーして 200 を返す（E2E）。
+    monkeypatch.setenv("AZURE_API_KEY", AZURE_KEY)
+    monkeypatch.setenv("BLUELLM_MASTER_KEY", MASTER_KEY)
+    cfg_text = """
+models:
+  - name: "claude-x"
+    params:
+      model: azure/primary
+      endpoint: https://example.openai.azure.com
+      key: os.environ/AZURE_API_KEY
+      version: "v"
+      fallback_to: backup
+      retry:
+        max_attempts: 1
+  - name: "backup"
+    params:
+      model: azure/backup-dep
+      endpoint: https://example.openai.azure.com
+      key: os.environ/AZURE_API_KEY
+      version: "v"
+generals:
+  key: os.environ/BLUELLM_MASTER_KEY
+"""
+    cfg = tmp_path / "config.yml"
+    cfg.write_text(cfg_text)
+
+    from openai import InternalServerError
+
+    seen = []
+
+    async def create(**kw):
+        seen.append(kw["model"])
+        if kw["model"] == "primary":
+            raise InternalServerError(
+                "ise",
+                response=httpx.Response(
+                    500, request=httpx.Request("POST", "https://example.test")
+                ),
+                body=None,
+            )
+        return text_completion()
+
+    install_fake_client(monkeypatch, create)
+    client = TestClient(create_app(load_config(str(cfg))))
+    r = client.post("/v1/messages", headers=AUTH, json=MSG)
+    assert r.status_code == 200
+    assert seen == ["primary", "backup-dep"]

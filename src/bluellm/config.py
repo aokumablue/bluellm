@@ -31,6 +31,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from bluellm import crypto
 from bluellm.redaction import register_secret
+from bluellm.reliability import DEFAULT_RETRY_POLICY, RetryPolicy
 
 
 class _RawModelEntry(BaseModel):
@@ -51,7 +52,7 @@ class _RawConfig(BaseModel):
 
 @dataclass
 class ModelConfig:
-    """1 つのモデルエントリの解決済み設定（provider、deployment、認証情報）。"""
+    """1 つのモデルエントリの解決済み設定（provider、deployment、認証情報、信頼性）。"""
 
     model_name: str
     provider: str
@@ -60,6 +61,9 @@ class ModelConfig:
     api_key: Optional[str] = None
     api_version: Optional[str] = None
     extra_params: Dict[str, Any] = field(default_factory=dict)
+    timeout: Optional[float] = None
+    retry: RetryPolicy = DEFAULT_RETRY_POLICY
+    fallback_to: Optional[str] = None
 
 
 @dataclass
@@ -176,6 +180,29 @@ def validate_salt_key(salt_key: Any) -> Any:
     return salt_key
 
 
+def _resolve_retry_policy(params: Dict[str, Any]) -> RetryPolicy:
+    """``params.retry`` から :class:`RetryPolicy` を構築する（未指定は SDK 既定相当）。
+
+    キー未指定の項目は :data:`DEFAULT_RETRY_POLICY` の値を引き継ぐため、
+    retry を一切書かないモデルは既存挙動（SDK の自動リトライ相当）を維持する。
+    """
+    retry_raw = params.get("retry") or {}
+    return RetryPolicy(
+        max_attempts=int(
+            retry_raw.get("max_attempts", DEFAULT_RETRY_POLICY.max_attempts)
+        ),
+        initial_backoff_ms=int(
+            retry_raw.get("initial_backoff_ms", DEFAULT_RETRY_POLICY.initial_backoff_ms)
+        ),
+        max_backoff_ms=int(
+            retry_raw.get("max_backoff_ms", DEFAULT_RETRY_POLICY.max_backoff_ms)
+        ),
+        jitter_ratio=float(
+            retry_raw.get("jitter_ratio", DEFAULT_RETRY_POLICY.jitter_ratio)
+        ),
+    )
+
+
 def _split_provider(model: str) -> tuple[str, str]:
     """``provider/deployment`` をペアに分割する。provider が省略された場合は openai をデフォルトとする。"""
     if "/" in model:
@@ -221,6 +248,7 @@ def load_config(path: str) -> Config:
         params = entry.get("params") or {}
         model = params.get("model", entry.get("name", ""))
         provider, deployment = _split_provider(model)
+        timeout_raw = params.get("request_timeout_seconds")
         model_list.append(
             ModelConfig(
                 model_name=entry["name"],
@@ -233,6 +261,9 @@ def load_config(path: str) -> Config:
                 api_key=_resolve_secret(params.get("key"), effective_salt),
                 api_version=params.get("version"),
                 extra_params=dict(params.get("extra_params") or {}),
+                timeout=float(timeout_raw) if timeout_raw is not None else None,
+                retry=_resolve_retry_policy(params),
+                fallback_to=params.get("fallback_to"),
             )
         )
 
