@@ -6,6 +6,7 @@ from typing import (
     TYPE_CHECKING,
     Any,
     AsyncIterator,
+    Callable,
     Dict,
     Iterator,
     List,
@@ -58,12 +59,14 @@ class BlueLLMStreamWrapper(_StreamingUsageMixin, AdapterCompletionStreamWrapper)
         applied_edits: Optional[List[AppliedEdit]] = None,
         compaction_block: Optional[CompactionBlock] = None,
         iterations_usage: Optional[List[UsageIteration]] = None,
+        on_usage: Optional[Callable[[Dict[str, Any]], None]] = None,
     ):
         """OpenAI の completion stream をラップし、ストリームごとの状態を初期化する。
 
         ``tool_name_mapping`` は切り詰められた tool 名を復元する。``applied_edits`` /
         ``compaction_block`` / ``iterations_usage`` は context-management の
-        ポリフィルデータを発行イベントに付与する。
+        ポリフィルデータを発行イベントに付与する。``on_usage`` は最終 message_delta の
+        usage 確定時に 1 度だけ呼ばれるコールバック（usage 記録用）。
         """
         super().__init__(completion_stream)
         self.sent_first_chunk: bool = False
@@ -77,6 +80,8 @@ class BlueLLMStreamWrapper(_StreamingUsageMixin, AdapterCompletionStreamWrapper)
         self.queued_usage_chunk: bool = False
         self.current_content_block_index: int = 0
         self.model = model
+        # 最終 message_delta usage 確定時に 1 度だけ呼ぶ usage 記録コールバック。
+        self._on_usage = on_usage
         # 切り詰められた tool 名から元の名前へのマッピング（OpenAI の 64 文字制限対応）
         self.tool_name_mapping = tool_name_mapping or {}
         # 最終 message_delta に applied_edits を付与するポリフィル。
@@ -345,10 +350,21 @@ class BlueLLMStreamWrapper(_StreamingUsageMixin, AdapterCompletionStreamWrapper)
         保持中チャンクをクリアしてから先頭イベントを返す。
         """
         merged_chunk = self._merge_usage_into_held_stop_reason_chunk(chunk)
+        self._emit_usage_record(merged_chunk.get("usage"))
         self.chunk_queue.append(merged_chunk)
         self.queued_usage_chunk = True
         self.holding_stop_reason_chunk = None
         return self.chunk_queue.popleft()
+
+    def _emit_usage_record(self, usage: Optional[Dict[str, Any]]) -> None:
+        """確定 usage を ``on_usage`` コールバックへ 1 度だけ渡す（失敗は握り潰す）。"""
+        if self._on_usage is None or not usage:
+            return
+        try:
+            self._on_usage(usage)
+        except Exception:
+            # usage 記録は付随処理。失敗してもストリーム応答は壊さない。
+            verbose_logger.debug("on_usage callback failed", exc_info=True)
 
     def _handle_no_choices_chunk(
         self, chunk: Any, will_merge_into_held: bool

@@ -49,6 +49,45 @@ def _async_collect_raw(chunks, **wrap_kw):
     return asyncio.run(run())
 
 
+# ---- on_usage callback ----
+def test_on_usage_fires_once_with_final_usage():
+    seen = []
+    chunks = [
+        stream_chunk(content="Hi"),
+        stream_chunk(finish_reason="stop"),
+        usage_only_chunk(usage(8, 2)),
+    ]
+    _async_collect(chunks, on_usage=seen.append)
+    assert len(seen) == 1
+    assert seen[0]["input_tokens"] == 8
+    assert seen[0]["output_tokens"] == 2
+
+
+def test_on_usage_exception_is_swallowed():
+    def boom(_usage):
+        raise RuntimeError("record failed")
+
+    chunks = [
+        stream_chunk(content="Hi"),
+        stream_chunk(finish_reason="stop"),
+        usage_only_chunk(usage(8, 2)),
+    ]
+    # コールバックが例外でもストリームは完走する。
+    out = _async_collect(chunks, on_usage=boom)
+    assert "message_stop" in out
+
+
+def test_on_usage_not_fired_without_callback():
+    # on_usage 未指定なら何もしない（既存ストリーミング挙動と同一）。
+    chunks = [
+        stream_chunk(content="Hi"),
+        stream_chunk(finish_reason="stop"),
+        usage_only_chunk(usage(8, 2)),
+    ]
+    out = _async_collect(chunks)
+    assert "message_start" in out and "message_stop" in out
+
+
 # ---- _merge_usage_into_held_stop_reason_chunk ----
 def test_merge_usage_with_cache_tokens_and_context_management():
     w = _wrap(applied_edits=[{"type": "clear_tool_uses_20250919"}])

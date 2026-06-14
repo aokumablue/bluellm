@@ -2,6 +2,7 @@ from typing import (
     TYPE_CHECKING,
     Any,
     AsyncIterator,
+    Callable,
     Dict,
     Iterator,
     List,
@@ -49,6 +50,7 @@ class _StreamingTranslationMixin:
         tool_name_mapping: Optional[Dict[str, str]] = None,
         polyfill_result: Optional[PolyfillResult] = None,
         is_async: bool = True,
+        on_usage: Optional[Callable[[Dict[str, Any]], None]] = None,
     ) -> Union[AsyncIterator[bytes], Iterator[bytes], None]:
         """
         OpenAI ストリーミングレスポンスを Anthropic 形式に変換する。
@@ -81,6 +83,7 @@ class _StreamingTranslationMixin:
             applied_edits=applied_edits,
             compaction_block=compaction_block,
             iterations_usage=iterations_usage,
+            on_usage=on_usage,
         )
         # 適切なイベントフォーマットのため SSE ラップバージョンを返す。
         if is_async:

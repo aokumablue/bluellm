@@ -126,3 +126,58 @@ def test_stream_fallback(monkeypatch):
     chunks = asyncio.run(_drain(payload))
     assert calls == ["primary-dep", "secondary-dep"]
     assert b"message_start" in b"".join(chunks)
+
+
+class _RecordingLogger:
+    def __init__(self):
+        self.records = []
+
+    def record(self, model, provider, usage):
+        self.records.append((model, provider, dict(usage)))
+
+
+def test_usage_recorded_for_nonstream(monkeypatch):
+    async def create(**kw):
+        return text_completion()
+
+    install_fake_client(monkeypatch, create)
+    rec = _RecordingLogger()
+    asyncio.run(handler.process(_BODY, [_mc("primary", "primary-dep")], rec))
+    assert rec.records == [
+        ("primary-dep", "azure", {"input_tokens": 12, "output_tokens": 7})
+    ]
+
+
+def test_usage_recorded_for_stream(monkeypatch):
+    async def create(**kw):
+        async def gen():
+            yield stream_chunk(content="Hi")
+            yield stream_chunk(finish_reason="stop")
+            yield usage_only_chunk(usage(8, 2))
+
+        return gen()
+
+    install_fake_client(monkeypatch, create)
+    rec = _RecordingLogger()
+    is_stream, payload = asyncio.run(
+        handler.process({**_BODY, "stream": True}, [_mc("primary", "primary-dep")], rec)
+    )
+    asyncio.run(_drain(payload))
+    # 最終 usage 確定時に 1 度だけ記録される。
+    assert len(rec.records) == 1
+    model, provider, recorded = rec.records[0]
+    assert model == "primary-dep" and provider == "azure"
+    assert recorded["input_tokens"] == 8 and recorded["output_tokens"] == 2
+
+
+def test_no_usage_logger_is_noop(monkeypatch):
+    # usage_logger 未指定でも従来どおり動作する（記録なし）。
+    async def create(**kw):
+        return text_completion()
+
+    install_fake_client(monkeypatch, create)
+    is_stream, payload = asyncio.run(
+        handler.process(_BODY, [_mc("primary", "primary-dep")])
+    )
+    assert is_stream is False
+    assert payload["usage"] == {"input_tokens": 12, "output_tokens": 7}

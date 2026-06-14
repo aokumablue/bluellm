@@ -12,6 +12,7 @@ from openai import APIStatusError
 from bluellm import handler
 from bluellm.auth import Authenticator, require_auth
 from bluellm.config import Config, ModelConfig
+from bluellm.cost import UsageLogger
 from bluellm.middleware import allowlist_middleware, rate_limit_middleware
 from bluellm.router import Router
 from bluellm.translation import UnsupportedContentError
@@ -63,6 +64,8 @@ def create_app(config: Config) -> FastAPI:
     app.state.config = config
     app.state.router = Router(config)
     app.state.authenticator = Authenticator(config.general_settings.master_key)
+    # usage トークン記録（常時有効・固定の日次 JSONL へ追記）。
+    app.state.usage_logger = UsageLogger()
 
     max_bytes = config.general_settings.max_request_body_mb * 1024 * 1024
 
@@ -127,7 +130,9 @@ def create_app(config: Config) -> FastAPI:
             return _anthropic_error(404, "not_found_error", "model not found")
 
         try:
-            is_stream, payload = await handler.process(body, model_configs)
+            is_stream, payload = await handler.process(
+                body, model_configs, request.app.state.usage_logger
+            )
         except UnsupportedContentError as e:
             # クライアントがプロキシで変換できないコンテンツブロックを送信した場合
             # （例: サポートされていない画像ソース）は、暗黙的に破棄せず拒否する。
