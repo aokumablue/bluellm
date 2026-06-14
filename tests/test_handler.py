@@ -132,8 +132,8 @@ class _RecordingLogger:
     def __init__(self):
         self.records = []
 
-    def record(self, model, provider, usage):
-        self.records.append((model, provider, dict(usage)))
+    def record(self, model, provider, usage, endpoint=None):
+        self.records.append((model, provider, dict(usage), endpoint))
 
 
 def test_usage_recorded_for_nonstream(monkeypatch):
@@ -144,7 +144,12 @@ def test_usage_recorded_for_nonstream(monkeypatch):
     rec = _RecordingLogger()
     asyncio.run(handler.process(_BODY, [_mc("primary", "primary-dep")], rec))
     assert rec.records == [
-        ("primary-dep", "azure", {"input_tokens": 12, "output_tokens": 7})
+        (
+            "primary-dep",
+            "azure",
+            {"input_tokens": 12, "output_tokens": 7},
+            "example.openai.azure.com",
+        )
     ]
 
 
@@ -165,8 +170,9 @@ def test_usage_recorded_for_stream(monkeypatch):
     asyncio.run(_drain(payload))
     # 最終 usage 確定時に 1 度だけ記録される。
     assert len(rec.records) == 1
-    model, provider, recorded = rec.records[0]
+    model, provider, recorded, endpoint = rec.records[0]
     assert model == "primary-dep" and provider == "azure"
+    assert endpoint == "example.openai.azure.com"
     assert recorded["input_tokens"] == 8 and recorded["output_tokens"] == 2
 
 

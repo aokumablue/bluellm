@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 
-from bluellm.cost import UsageLogger
+import pytest
+
+from bluellm.cost import UsageLogger, endpoint_host
 
 
 def _read_lines(path):
@@ -32,6 +34,47 @@ def test_records_tokens_to_dated_file(tmp_path):
             "output_tokens": 7,
         }
     ]
+
+
+def test_records_endpoint_when_given(tmp_path):
+    logger = UsageLogger(base_dir=tmp_path)
+    when = datetime(2026, 6, 14, tzinfo=timezone.utc)
+    logger.record(
+        "gpt-5.4",
+        "azure",
+        {"input_tokens": 1, "output_tokens": 1},
+        endpoint="api.example.com",
+        now=lambda: when,
+    )
+    row = _read_lines(tmp_path / "2026-06-14.jsonl")[0]
+    assert row["endpoint"] == "api.example.com"
+
+
+def test_endpoint_omitted_when_none(tmp_path):
+    logger = UsageLogger(base_dir=tmp_path)
+    when = datetime(2026, 6, 14, tzinfo=timezone.utc)
+    logger.record(
+        "gpt-5.4",
+        "azure",
+        {"input_tokens": 1, "output_tokens": 1},
+        endpoint=None,
+        now=lambda: when,
+    )
+    row = _read_lines(tmp_path / "2026-06-14.jsonl")[0]
+    assert "endpoint" not in row
+
+
+@pytest.mark.parametrize(
+    ("api_base", "expected"),
+    [
+        ("https://api.example.com/v1", "api.example.com"),
+        (None, "localhost"),
+        ("", "localhost"),
+        ("http://127.0.0.1:11434/v1", "127.0.0.1"),
+    ],
+)
+def test_endpoint_host_extracts_hostname(api_base, expected):
+    assert endpoint_host(api_base) == expected
 
 
 def test_records_cache_tokens_when_present(tmp_path):

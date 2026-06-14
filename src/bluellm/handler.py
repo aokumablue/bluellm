@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Any, AsyncIterator, Dict, List, Optional, Tuple, Union
 
 from bluellm.config import ModelConfig
-from bluellm.cost import UsageLogger
+from bluellm.cost import UsageLogger, endpoint_host
 from bluellm.observability import NOOP_SPAN
 from bluellm.providers.openai_like import get_provider
 from bluellm.reliability import call_with_retry, is_retryable
@@ -71,7 +71,12 @@ async def process(
                 mc = model_config
 
                 def on_usage(usage: Dict[str, Any]) -> None:
-                    usage_logger.record(mc.deployment, mc.provider, usage)
+                    usage_logger.record(
+                        mc.deployment,
+                        mc.provider,
+                        usage,
+                        endpoint=endpoint_host(mc.api_base),
+                    )
 
             sse_iter = adapter.translate_completion_output_params_streaming(
                 completion_stream=result,
@@ -91,6 +96,9 @@ async def process(
         span.set("bluellm.output_tokens", usage.get("output_tokens"))
         if usage_logger is not None:
             usage_logger.record(
-                model_config.deployment, model_config.provider, usage
+                model_config.deployment,
+                model_config.provider,
+                usage,
+                endpoint=endpoint_host(model_config.api_base),
             )
         return False, anthropic_response

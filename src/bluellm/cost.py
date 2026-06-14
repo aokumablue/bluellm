@@ -12,6 +12,7 @@ import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Mapping, Optional
+from urllib.parse import urlparse
 
 logger = logging.getLogger("bluellm")
 
@@ -27,6 +28,17 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def endpoint_host(api_base: Optional[str]) -> str:
+    """api_base からホスト名のみを抽出する（秘密のURL/パス/keyは含めない）。
+
+    api_base が None/空（ollama 既定のローカル等）の場合は "localhost" を返す。
+    """
+    if not api_base:
+        return "localhost"
+    host = urlparse(api_base).hostname
+    return host or "localhost"
+
+
 class UsageLogger:
     """トークン使用量を日次 JSONL（``<base_dir>/<date>.jsonl``）に追記するロガー。"""
 
@@ -40,12 +52,14 @@ class UsageLogger:
         provider: str,
         usage: Mapping[str, Any],
         *,
+        endpoint: Optional[str] = None,
         now: Callable[[], datetime] = _utcnow,
     ) -> None:
         """``usage`` から input/output/cache トークンを抽出して 1 行追記する。
 
         書き込み時点の日付でファイル名を決め、日次でファイルを分ける。
-        記録失敗（ディレクトリ作成不可・書き込み失敗等）は握り潰す。
+        ``endpoint`` が真値ならホスト名として entry に追加する（生 URL や key は
+        出力しない）。記録失敗（ディレクトリ作成不可・書き込み失敗等）は握り潰す。
         """
         try:
             ts = now()
@@ -53,9 +67,11 @@ class UsageLogger:
                 "ts": ts.isoformat(),
                 "model": model,
                 "provider": provider,
-                "input_tokens": int(usage.get("input_tokens", 0) or 0),
-                "output_tokens": int(usage.get("output_tokens", 0) or 0),
             }
+            if endpoint:
+                entry["endpoint"] = endpoint
+            entry["input_tokens"] = int(usage.get("input_tokens", 0) or 0)
+            entry["output_tokens"] = int(usage.get("output_tokens", 0) or 0)
             for key in _CACHE_KEYS:
                 value = usage.get(key)
                 if value:
