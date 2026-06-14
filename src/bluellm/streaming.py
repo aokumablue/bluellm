@@ -138,9 +138,12 @@ class BlueLLMStreamWrapper(AdapterCompletionStreamWrapper):
             )
             uncached_input_tokens -= cached_tokens
 
+        # 非ストリーミング経路（translation/_response.py の _build_usage_dict）と
+        # 同様に、cached_tokens > prompt_tokens や負の completion_tokens による
+        # 負数 usage が SSE でクライアントへ流出するのを防ぐためクランプする。
         usage_dict: UsageDelta = {
-            "input_tokens": uncached_input_tokens,
-            "output_tokens": chunk.usage.completion_tokens or 0,
+            "input_tokens": max(0, uncached_input_tokens),
+            "output_tokens": max(0, chunk.usage.completion_tokens or 0),
         }
         if (
             hasattr(chunk.usage, "_cache_creation_input_tokens")

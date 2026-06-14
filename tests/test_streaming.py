@@ -79,6 +79,30 @@ def test_merge_usage_without_delta_key():
     assert merged["usage"]["input_tokens"] == 5
 
 
+def test_merge_usage_clamps_negative_input_tokens():
+    """cached_tokens > prompt_tokens でも input_tokens が負にならず 0 にクランプされる。"""
+    w = _wrap()
+    w.holding_stop_reason_chunk = {"type": "message_delta", "delta": {}}
+    u = SimpleNamespace(
+        prompt_tokens=5,
+        completion_tokens=10,
+        prompt_tokens_details=SimpleNamespace(cached_tokens=10),
+    )
+    merged = w._merge_usage_into_held_stop_reason_chunk(SimpleNamespace(usage=u))
+    assert merged["usage"]["input_tokens"] == 0
+    assert merged["usage"]["output_tokens"] == 10
+
+
+def test_merge_usage_clamps_negative_output_tokens():
+    """負の completion_tokens でも output_tokens が負にならず 0 にクランプされる。"""
+    w = _wrap()
+    w.holding_stop_reason_chunk = {"type": "message_delta", "delta": {}}
+    u = SimpleNamespace(prompt_tokens=10, completion_tokens=-5, prompt_tokens_details=None)
+    merged = w._merge_usage_into_held_stop_reason_chunk(SimpleNamespace(usage=u))
+    assert merged["usage"]["input_tokens"] == 10
+    assert merged["usage"]["output_tokens"] == 0
+
+
 # ---- _augment_message_delta_usage ----
 def test_augment_adds_iterations():
     w = _wrap(iterations_usage=[{"type": "message", "input_tokens": 1, "output_tokens": 1}])
