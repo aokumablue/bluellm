@@ -396,6 +396,78 @@ def test_build_client_azure_plain_endpoint_uses_async_azure_openai(monkeypatch):
     assert "async_openai" not in calls
 
 
+def test_build_client_ollama_uses_async_openai_with_defaults(monkeypatch):
+    # Ollama exposes an OpenAI-compatible endpoint; build a plain AsyncOpenAI
+    # client. With no endpoint/key configured, fall back to the local Ollama
+    # base_url and a dummy api_key (the SDK requires a non-empty key).
+    calls = {}
+
+    def fake_async_openai(**kwargs):
+        calls["async_openai"] = kwargs
+        return "ollama-client"
+
+    monkeypatch.setattr("bluellm.providers.openai_like.AsyncOpenAI", fake_async_openai)
+    mc = ModelConfig(
+        model_name="*",
+        provider="ollama",
+        deployment="llama3.3",
+        api_base=None,
+        api_key=None,
+        api_version=None,
+    )
+
+    provider = OpenAILikeProvider(mc)
+
+    assert provider._client == "ollama-client"
+    assert calls["async_openai"] == {
+        "api_key": "ollama",
+        "base_url": "http://localhost:11434/v1",
+    }
+
+
+def test_build_client_ollama_honors_explicit_endpoint_and_key(monkeypatch):
+    # Explicit endpoint/key override the local Ollama defaults.
+    calls = {}
+
+    def fake_async_openai(**kwargs):
+        calls["async_openai"] = kwargs
+        return "ollama-client"
+
+    monkeypatch.setattr("bluellm.providers.openai_like.AsyncOpenAI", fake_async_openai)
+    mc = ModelConfig(
+        model_name="*",
+        provider="ollama",
+        deployment="llama3.3",
+        api_base="http://ollama.internal:11434/v1",
+        api_key="tok",  # nosec - synthetic placeholder, not a real credential
+        api_version=None,
+    )
+
+    OpenAILikeProvider(mc)
+
+    assert calls["async_openai"] == {
+        "api_key": "tok",
+        "base_url": "http://ollama.internal:11434/v1",
+    }
+
+
+def test_get_provider_accepts_ollama(monkeypatch):
+    # ollama must be an accepted provider (not rejected as unsupported).
+    from bluellm.providers.openai_like import get_provider
+
+    monkeypatch.setattr(OpenAILikeProvider, "_build_client", lambda self: "c")
+    mc = ModelConfig(
+        model_name="*",
+        provider="ollama",
+        deployment="llama3.3",
+        api_base="http://localhost:11434/v1",
+        api_key=None,
+        api_version=None,
+    )
+    provider = get_provider(mc)
+    assert isinstance(provider, OpenAILikeProvider)
+
+
 def test_cache_key_excludes_plaintext_api_key():
     # The provider cache key lives in a long-lived module global; the raw
     # api_key must not be stored in it.

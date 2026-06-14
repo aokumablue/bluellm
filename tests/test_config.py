@@ -137,6 +137,46 @@ def test_endpoint_loopback_ip_rejected(tmp_path, monkeypatch):
         load_config(str(p))
 
 
+def test_ollama_loopback_endpoint_allowed(tmp_path, monkeypatch):
+    # Ollama runs locally; an ollama/* model may point at a loopback endpoint.
+    # The SSRF guard's loopback rejection is carved out only for ollama.
+    monkeypatch.setenv("BLUELLM_MASTER_KEY", MASTER_KEY)
+    cfg_text = """
+models:
+  - name: "*"
+    params:
+      model: ollama/llama3.3
+      endpoint: http://localhost:11434/v1
+generals:
+  key: os.environ/BLUELLM_MASTER_KEY
+"""
+    p = tmp_path / "config.yml"
+    p.write_text(cfg_text)
+    cfg = load_config(str(p))
+    assert cfg.model_list[0].provider == "ollama"
+    assert cfg.model_list[0].api_base == "http://localhost:11434/v1"
+
+
+def test_non_ollama_loopback_endpoint_still_rejected(tmp_path, monkeypatch):
+    # The loopback carve-out must NOT relax the SSRF guard for non-ollama
+    # providers (e.g. an openai entry pointed at loopback stays rejected).
+    monkeypatch.setenv("BLUELLM_MASTER_KEY", MASTER_KEY)
+    cfg_text = """
+models:
+  - name: "*"
+    params:
+      model: openai/gpt-5.4
+      endpoint: http://127.0.0.1:11434/v1
+      key: plaintext-key
+generals:
+  key: os.environ/BLUELLM_MASTER_KEY
+"""
+    p = tmp_path / "config.yml"
+    p.write_text(cfg_text)
+    with pytest.raises(ValueError):
+        load_config(str(p))
+
+
 def test_malformed_config_schema_rejected(tmp_path, monkeypatch):
     # M10: an unknown top-level key (e.g. a typo) fails loudly at load.
     monkeypatch.setenv("BLUELLM_MASTER_KEY", MASTER_KEY)

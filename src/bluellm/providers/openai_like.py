@@ -1,8 +1,8 @@
-"""openai SDK を使用した OpenAI / Azure (Microsoft Foundry) provider。
+"""openai SDK を使用した OpenAI / Azure (Microsoft Foundry) / Ollama provider。
 
-どちらも Chat Completions を使用して同一のレスポンス形式を返すため、
-単一の実装でカバーできる。設定済みモデルの ``provider/`` プレフィックスで
-クライアントの種類を選択する。
+いずれも Chat Completions（Ollama は OpenAI 互換エンドポイント）を使用して
+同一のレスポンス形式を返すため、単一の実装でカバーできる。設定済みモデルの
+``provider/`` プレフィックスでクライアントの種類を選択する。
 """
 
 from __future__ import annotations
@@ -98,6 +98,14 @@ class OpenAILikeProvider(BaseProvider):
     def _build_client(self):
         """設定から AsyncAzureOpenAI / AsyncOpenAI クライアントを構築する。"""
         mc = self.mc
+        if mc.provider == "ollama":
+            # Ollama は OpenAI 互換エンドポイント（/v1/chat/completions）を公開する。
+            # API キーは不要だが openai SDK が非空値を要求するためダミーを既定にする。
+            # endpoint 省略時はローカル Ollama の既定 base_url を使う。
+            return AsyncOpenAI(
+                api_key=mc.api_key or "ollama",
+                base_url=mc.api_base or "http://localhost:11434/v1",
+            )
         if mc.provider == "azure":
             # Azure OpenAI の ``.../openai/v1`` は正式な OpenAI-compatible endpoint なので、
             # OpenAI client をそのまま使う。
@@ -326,7 +334,7 @@ def get_provider(model_config: ModelConfig) -> BaseProvider:
     未サポートの provider の場合は ValueError を送出する。同一の設定で1つの
     クライアントを共有できるよう、接続フィンガープリントで provider をキャッシュする。
     """
-    if model_config.provider not in ("openai", "azure"):
+    if model_config.provider not in ("openai", "azure", "ollama"):
         raise ValueError(f"Unsupported provider: {model_config.provider!r}")
     key = _cache_key(model_config)
     provider = _PROVIDER_CACHE.get(key)

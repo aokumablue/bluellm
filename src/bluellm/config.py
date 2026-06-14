@@ -99,7 +99,7 @@ def _resolve_secret(value: Any, salt_key: Optional[str]) -> Any:
     return resolved
 
 
-def _validate_api_base(api_base: Any) -> Any:
+def _validate_api_base(api_base: Any, *, allow_local: bool = False) -> Any:
     """SSRF 対策として、設定された上流 base URL を検証する。
 
     2 つのチェック（M10）:
@@ -111,6 +111,11 @@ def _validate_api_base(api_base: Any) -> Any:
        改ざんされた設定がプロキシを SSRF ガジェットとしてホストローカル
        サービスに悪用できないようにする。ホスト名とオンプレ/プライベート IP は
        通過させる（オペレーター信頼の正当な endpoint）。
+
+    ``allow_local=True`` の場合のみループバック/リンクローカルを許容する。
+    ローカル Ollama（既定 ``http://localhost:11434/v1``）を上流として
+    使う正当なケースのための明示的な carve-out であり、SSRF ガード本体は
+    維持する（``allow_local`` でないエントリは従来どおり拒否）。
 
     ``None``/空値は通過させる（OpenAI SDK がデフォルト base URL を使用）。
     """
@@ -130,7 +135,7 @@ def _validate_api_base(api_base: Any) -> Any:
         ip = ipaddress.ip_address(host)
     except ValueError:
         ip = None  # ホスト名であり IP リテラルではない
-    if ip is not None and (ip.is_loopback or ip.is_link_local):
+    if not allow_local and ip is not None and (ip.is_loopback or ip.is_link_local):
         raise ValueError(
             f"endpoint host {host!r} is a loopback/link-local address; refusing "
             "to use it as an upstream (SSRF / metadata-endpoint defense)"
@@ -222,7 +227,8 @@ def load_config(path: str) -> Config:
                 provider=provider,
                 deployment=deployment,
                 api_base=_validate_api_base(
-                    _resolve_secret(params.get("endpoint"), effective_salt)
+                    _resolve_secret(params.get("endpoint"), effective_salt),
+                    allow_local=(provider == "ollama"),
                 ),
                 api_key=_resolve_secret(params.get("key"), effective_salt),
                 api_version=params.get("version"),
