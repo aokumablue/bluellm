@@ -83,6 +83,9 @@ class GeneralSettings:
     rate_limit_burst: int = 200
     rate_limit_per_token: bool = False
     allowlist_cidrs: List[str] = field(default_factory=list)
+    otel_disabled: bool = False
+    otel_endpoint: str = "http://127.0.0.1:4318/v1/traces"
+    otel_service_name: str = "bluellm"
 
 
 @dataclass
@@ -275,6 +278,11 @@ def load_config(path: str) -> Config:
         rate_limit_burst=int(gs_raw.get("rate_limit_burst", 200)),
         rate_limit_per_token=bool(gs_raw.get("rate_limit_per_token", False)),
         allowlist_cidrs=_validate_allowlist_cidrs(gs_raw.get("allowlist_cidrs")),
+        otel_disabled=bool(gs_raw.get("otel_disabled", False)),
+        otel_endpoint=gs_raw.get(
+            "otel_endpoint", "http://127.0.0.1:4318/v1/traces"
+        ),
+        otel_service_name=gs_raw.get("otel_service_name", "bluellm"),
     )
 
     model_list: List[ModelConfig] = []

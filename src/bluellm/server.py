@@ -14,6 +14,7 @@ from bluellm.auth import Authenticator, require_auth
 from bluellm.config import Config, ModelConfig
 from bluellm.cost import UsageLogger
 from bluellm.middleware import allowlist_middleware, rate_limit_middleware
+from bluellm.observability import request_span
 from bluellm.router import Router
 from bluellm.translation import UnsupportedContentError
 
@@ -129,20 +130,24 @@ def create_app(config: Config) -> FastAPI:
             logger.info("Model routing failed: %s", e)
             return _anthropic_error(404, "not_found_error", "model not found")
 
-        try:
-            is_stream, payload = await handler.process(
-                body, model_configs, request.app.state.usage_logger
-            )
-        except UnsupportedContentError as e:
-            # クライアントがプロキシで変換できないコンテンツブロックを送信した場合
-            # （例: サポートされていない画像ソース）は、暗黙的に破棄せず拒否する。
-            return _anthropic_error(400, "invalid_request_error", str(e))
-        except Exception as e:  # サニタイズ: 上流の詳細/キーをクライアントに漏洩しない
-            return _handle_upstream_error(e)
+        with request_span(
+            "v1.messages",
+            **{"bluellm.requested_model": body.get("model", "")},
+        ) as span:
+            try:
+                is_stream, payload = await handler.process(
+                    body, model_configs, request.app.state.usage_logger, span
+                )
+            except UnsupportedContentError as e:
+                # クライアントがプロキシで変換できないコンテンツブロックを送信した
+                # 場合（例: サポートされていない画像ソース）は、暗黙的に破棄せず拒否する。
+                return _anthropic_error(400, "invalid_request_error", str(e))
+            except Exception as e:  # サニタイズ: 上流の詳細/キーをクライアントに漏洩しない
+                return _handle_upstream_error(e)
 
-        if is_stream:
-            return StreamingResponse(payload, media_type="text/event-stream")
-        return JSONResponse(content=payload)
+            if is_stream:
+                return StreamingResponse(payload, media_type="text/event-stream")
+            return JSONResponse(content=payload)
 
     @app.post("/v1/messages/count_tokens", dependencies=[Depends(require_auth)])
     async def count_tokens(request: Request):

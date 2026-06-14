@@ -20,3 +20,16 @@ def _isolate_usage_log(tmp_path_factory, monkeypatch):
     monkeypatch.setattr(
         "bluellm.cost._DEFAULT_BASE_DIR", tmp_path_factory.mktemp("usagelog")
     )
+
+
+@pytest.fixture(autouse=True)
+def _reset_otel_tracer():
+    """各テスト後に OTel のモジュールグローバル tracer を初期化し漏れを防ぐ。
+
+    CLI の serve テストは init_tracing を実呼び出しするため、これがないと
+    後続テストの request_span が実 tracer を使い、副作用（export 失敗等）を招く。
+    """
+    import bluellm.observability as obs
+
+    yield
+    obs._TRACER = None

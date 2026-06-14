@@ -327,6 +327,41 @@ generals:
         load_config(str(p))
 
 
+def test_otel_defaults(tmp_path, monkeypatch):
+    monkeypatch.setenv("AZURE_API_KEY", AZURE_KEY)
+    monkeypatch.setenv("BLUELLM_MASTER_KEY", MASTER_KEY)
+    cfg = load_config(_write(tmp_path, "os.environ/AZURE_API_KEY"))
+    gs = cfg.general_settings
+    assert gs.otel_disabled is False
+    assert gs.otel_endpoint == "http://127.0.0.1:4318/v1/traces"
+    assert gs.otel_service_name == "bluellm"
+
+
+def test_otel_parsed(tmp_path, monkeypatch):
+    monkeypatch.setenv("BLUELLM_MASTER_KEY", MASTER_KEY)
+    cfg_text = """
+models:
+  - name: "*"
+    params:
+      model: azure/gpt-5.4
+      endpoint: https://example.openai.azure.com
+      key: plaintext-key
+      version: "v"
+generals:
+  key: os.environ/BLUELLM_MASTER_KEY
+  otel_disabled: true
+  otel_endpoint: http://collector:4318/v1/traces
+  otel_service_name: my-proxy
+"""
+    p = tmp_path / "config.yml"
+    p.write_text(cfg_text)
+    cfg = load_config(str(p))
+    gs = cfg.general_settings
+    assert gs.otel_disabled is True
+    assert gs.otel_endpoint == "http://collector:4318/v1/traces"
+    assert gs.otel_service_name == "my-proxy"
+
+
 def test_malformed_config_schema_rejected(tmp_path, monkeypatch):
     # M10: an unknown top-level key (e.g. a typo) fails loudly at load.
     monkeypatch.setenv("BLUELLM_MASTER_KEY", MASTER_KEY)

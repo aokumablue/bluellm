@@ -133,6 +133,12 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     config = load_config(args.config)
     redaction.install()  # load_config でシークレットが登録された後に呼び出す
 
+    from bluellm import observability
+
+    # OTel は任意依存。インストールされていれば既定で有効化（未インストールは no-op）。
+    if observability.init_tracing(config.general_settings):
+        logging.getLogger("bluellm").info("OpenTelemetry tracing enabled")
+
     host = args.host or config.general_settings.host
     port = args.port or config.general_settings.port
 

@@ -11,6 +11,7 @@ from typing import Any, AsyncIterator, Dict, List, Optional, Tuple, Union
 
 from bluellm.config import ModelConfig
 from bluellm.cost import UsageLogger
+from bluellm.observability import NOOP_SPAN
 from bluellm.providers.openai_like import get_provider
 from bluellm.reliability import call_with_retry, is_retryable
 from bluellm.translation import BlueLLMMessagesAdapter
@@ -20,6 +21,7 @@ async def process(
     body: Dict[str, Any],
     model_configs: List[ModelConfig],
     usage_logger: Optional[UsageLogger] = None,
+    span: Any = NOOP_SPAN,
 ) -> Tuple[bool, Union[Dict[str, Any], AsyncIterator[bytes]]]:
     """(is_stream, payload) を返す。
 
@@ -29,6 +31,8 @@ async def process(
 
     ``usage_logger`` が与えられた場合、成功した候補のトークン使用量を記録する
     （非ストリームは即時、ストリームは最終 usage 確定時のコールバック経由）。
+    ``span`` には成功候補の provider/model/fallback 有無・トークン数を記録する
+    （OTel 無効時は :data:`NOOP_SPAN` で no-op）。
 
     payload は非ストリーム時は Anthropic Messages レスポンス dict、
     ストリーム時は SSE バイトチャンクの非同期イテレーター。
@@ -55,6 +59,12 @@ async def process(
                 continue
             raise
 
+        # 成功した候補の属性を span に記録する（OTel 無効時は no-op）。
+        span.set("bluellm.provider", model_config.provider)
+        span.set("bluellm.model", model_config.deployment)
+        span.set("bluellm.fallback_used", index > 0)
+        span.set("bluellm.stream", stream)
+
         if stream:
             on_usage = None
             if usage_logger is not None:
@@ -76,10 +86,11 @@ async def process(
             response=result,
             tool_name_mapping=tool_name_mapping,
         )
+        usage = anthropic_response.get("usage") or {}
+        span.set("bluellm.input_tokens", usage.get("input_tokens"))
+        span.set("bluellm.output_tokens", usage.get("output_tokens"))
         if usage_logger is not None:
             usage_logger.record(
-                model_config.deployment,
-                model_config.provider,
-                anthropic_response.get("usage") or {},
+                model_config.deployment, model_config.provider, usage
             )
         return False, anthropic_response
