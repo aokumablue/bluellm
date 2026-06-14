@@ -57,7 +57,7 @@ def test_wildcard_routing(tmp_path, monkeypatch):
     cfg = load_config(_write(tmp_path, "os.environ/AZURE_API_KEY"))
     router = Router(cfg)
     # Claude Code's model name routes through the "*" catch-all.
-    assert router.resolve("claude-sonnet-4-20250514").deployment == "gpt-5.4"
+    assert router.resolve("claude-sonnet-4-20250514")[0].deployment == "gpt-5.4"
 
 
 def test_encrypted_value_requires_dedicated_salt_key(tmp_path, monkeypatch):
@@ -354,6 +354,104 @@ generals:
     assert gs.otel_disabled is True
     assert gs.otel_endpoint == "http://collector:4318/v1/traces"
     assert gs.otel_service_name == "my-proxy"
+
+
+def test_circuit_breaker_defaults(tmp_path, monkeypatch):
+    monkeypatch.setenv("AZURE_API_KEY", AZURE_KEY)
+    monkeypatch.setenv("BLUELLM_MASTER_KEY", MASTER_KEY)
+    cfg = load_config(_write(tmp_path, "os.environ/AZURE_API_KEY"))
+    gs = cfg.general_settings
+    assert gs.circuit_breaker_threshold == 3
+    assert gs.circuit_breaker_ttl_seconds == 30.0
+
+
+def test_circuit_breaker_parsed(tmp_path, monkeypatch):
+    monkeypatch.setenv("BLUELLM_MASTER_KEY", MASTER_KEY)
+    cfg_text = """
+models:
+  - name: "*"
+    params:
+      model: azure/gpt-5.4
+      endpoint: https://example.openai.azure.com
+      key: plaintext-key
+      version: "v"
+generals:
+  key: os.environ/BLUELLM_MASTER_KEY
+  circuit_breaker_threshold: 7
+  circuit_breaker_ttl_seconds: 12.5
+"""
+    p = tmp_path / "config.yml"
+    p.write_text(cfg_text)
+    cfg = load_config(str(p))
+    gs = cfg.general_settings
+    assert gs.circuit_breaker_threshold == 7
+    assert gs.circuit_breaker_ttl_seconds == 12.5
+
+
+def test_params_list_multiple_endpoints(tmp_path, monkeypatch):
+    # params をリスト形式で与えると、同一 model_name の複数 ModelConfig が
+    # 各 endpoint ごとに生成される。fallback_to は先頭要素を全体に適用する。
+    monkeypatch.setenv("BLUELLM_MASTER_KEY", MASTER_KEY)
+    cfg_text = """
+models:
+  - name: "claude-3"
+    params:
+      - model: azure/dep-a
+        endpoint: https://a.openai.azure.com
+        key: key-a
+        version: "v1"
+        fallback_to: backup
+      - model: azure/dep-b
+        endpoint: https://b.openai.azure.com
+        key: key-b
+        version: "v2"
+generals:
+  key: os.environ/BLUELLM_MASTER_KEY
+"""
+    p = tmp_path / "config.yml"
+    p.write_text(cfg_text)
+    cfg = load_config(str(p))
+    group = [mc for mc in cfg.model_list if mc.model_name == "claude-3"]
+    assert len(group) == 2
+    assert [mc.deployment for mc in group] == ["dep-a", "dep-b"]
+    assert [mc.api_base for mc in group] == [
+        "https://a.openai.azure.com",
+        "https://b.openai.azure.com",
+    ]
+    assert [mc.api_key for mc in group] == ["key-a", "key-b"]
+    # fallback_to は先頭要素の値を全エンドポイントへ一律適用する。
+    assert [mc.fallback_to for mc in group] == ["backup", "backup"]
+    router = Router(cfg)
+    resolved = router.resolve("claude-3")
+    assert [mc.deployment for mc in resolved] == ["dep-a", "dep-b"]
+
+
+def test_params_empty_list_falls_back_to_single_default(tmp_path, monkeypatch):
+    # 空リストの params は単一の空 params（provider 既定）と同等に扱う。
+    monkeypatch.setenv("BLUELLM_MASTER_KEY", MASTER_KEY)
+    cfg_text = """
+models:
+  - name: "solo"
+    params: []
+generals:
+  key: os.environ/BLUELLM_MASTER_KEY
+"""
+    p = tmp_path / "config.yml"
+    p.write_text(cfg_text)
+    cfg = load_config(str(p))
+    group = [mc for mc in cfg.model_list if mc.model_name == "solo"]
+    assert len(group) == 1
+    assert group[0].provider == "openai"
+    assert group[0].deployment == "solo"
+
+
+def test_params_single_dict_still_single_config(tmp_path, monkeypatch):
+    # 従来の単一 dict 形式は長さ 1 の ModelConfig として既存挙動を維持する。
+    monkeypatch.setenv("AZURE_API_KEY", AZURE_KEY)
+    monkeypatch.setenv("BLUELLM_MASTER_KEY", MASTER_KEY)
+    cfg = load_config(_write(tmp_path, "os.environ/AZURE_API_KEY"))
+    assert len(cfg.model_list) == 1
+    assert cfg.model_list[0].deployment == "gpt-5.4"
 
 
 def test_malformed_config_schema_rejected(tmp_path, monkeypatch):

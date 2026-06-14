@@ -24,7 +24,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -35,11 +35,16 @@ from bluellm.reliability import DEFAULT_RETRY_POLICY, RetryPolicy
 
 
 class _RawModelEntry(BaseModel):
-    """``models`` エントリ 1 件の生 YAML スキーマ（params は自由形式のまま保持）。"""
+    """``models`` エントリ 1 件の生 YAML スキーマ（params は自由形式のまま保持）。
+
+    ``params`` は単一の dict（1 エンドポイント）または dict のリスト
+    （同一モデル名の複数エンドポイント群）のいずれかを受け付ける。各
+    エンドポイント dict 内は従来どおり自由形式。
+    """
 
     model_config = ConfigDict(extra="forbid")
     name: str
-    params: Dict[str, Any] = Field(default_factory=dict)
+    params: Union[Dict[str, Any], List[Dict[str, Any]]] = Field(default_factory=dict)
 
 
 class _RawConfig(BaseModel):
@@ -73,6 +78,10 @@ class GeneralSettings:
     runaway ガードは単一グローバルのトークンバケットで暴走のみ抑止する（寛容な
     既定値で常時 ON・単一ユーザーを妨げない）、allowlist は既定空＝全許可
     （既存挙動と等価）。
+
+    ``circuit_breaker_threshold``/``circuit_breaker_ttl_seconds`` は後続フェーズの
+    エンドポイント単位サーキットブレーカ（連続失敗回数の閾値と open 状態の TTL 秒）
+    の設定値。
     """
 
     master_key: Optional[str] = None
@@ -85,6 +94,8 @@ class GeneralSettings:
     otel_disabled: bool = False
     otel_endpoint: str = "http://127.0.0.1:4318/v1/traces"
     otel_service_name: str = "bluellm"
+    circuit_breaker_threshold: int = 3
+    circuit_breaker_ttl_seconds: float = 30.0
 
 
 @dataclass
@@ -243,6 +254,53 @@ def _split_provider(model: str) -> tuple[str, str]:
     return "openai", model
 
 
+def _build_model_configs(
+    entry: Dict[str, Any], effective_salt: Optional[str]
+) -> List[ModelConfig]:
+    """1 件の ``models`` エントリから :class:`ModelConfig` のリストを構築する。
+
+    ``params`` が dict（または未指定）の場合は単一エンドポイントとして長さ 1 の
+    リストを返す（既存挙動と完全に等価）。``params`` が dict のリストの場合は、
+    各要素を 1 エンドポイントとして個別に解決し、全て同一 ``model_name``
+    （``entry["name"]``）の複数 ModelConfig を返す。空リストは単一の空 params と
+    同等（長さ 1・provider 既定）として扱う。
+
+    ``fallback_to`` はモデル名レベルの概念のため、リスト形式では先頭要素の
+    ``fallback_to`` を全エンドポイントに一律適用する。
+    """
+    name = entry["name"]
+
+    def _one(ep_params: Dict[str, Any], fallback_to: Optional[str]) -> ModelConfig:
+        """単一エンドポイント params から 1 つの :class:`ModelConfig` を構築する。"""
+        model = ep_params.get("model", name)
+        provider, deployment = _split_provider(model)
+        timeout_raw = ep_params.get("request_timeout_seconds")
+        return ModelConfig(
+            model_name=name,
+            provider=provider,
+            deployment=deployment,
+            api_base=_validate_api_base(
+                _resolve_secret(ep_params.get("endpoint"), effective_salt),
+                allow_local=(provider == "ollama"),
+            ),
+            api_key=_resolve_secret(ep_params.get("key"), effective_salt),
+            api_version=ep_params.get("version"),
+            extra_params=dict(ep_params.get("extra_params") or {}),
+            timeout=float(timeout_raw) if timeout_raw is not None else None,
+            retry=_resolve_retry_policy(ep_params),
+            fallback_to=fallback_to,
+        )
+
+    params = entry.get("params")
+    if isinstance(params, list):
+        if not params:
+            return [_one({}, None)]
+        shared_fallback = params[0].get("fallback_to")
+        return [_one(ep or {}, shared_fallback) for ep in params]
+    params = params or {}
+    return [_one(params, params.get("fallback_to"))]
+
+
 def load_config(path: str) -> Config:
     """``path`` の YAML 設定を読み込み、:class:`Config` に解決する。
 
@@ -280,31 +338,15 @@ def load_config(path: str) -> Config:
             "otel_endpoint", "http://127.0.0.1:4318/v1/traces"
         ),
         otel_service_name=gs_raw.get("otel_service_name", "bluellm"),
+        circuit_breaker_threshold=int(gs_raw.get("circuit_breaker_threshold", 3)),
+        circuit_breaker_ttl_seconds=float(
+            gs_raw.get("circuit_breaker_ttl_seconds", 30.0)
+        ),
     )
 
     model_list: List[ModelConfig] = []
     for entry in raw.get("models") or []:
-        params = entry.get("params") or {}
-        model = params.get("model", entry.get("name", ""))
-        provider, deployment = _split_provider(model)
-        timeout_raw = params.get("request_timeout_seconds")
-        model_list.append(
-            ModelConfig(
-                model_name=entry["name"],
-                provider=provider,
-                deployment=deployment,
-                api_base=_validate_api_base(
-                    _resolve_secret(params.get("endpoint"), effective_salt),
-                    allow_local=(provider == "ollama"),
-                ),
-                api_key=_resolve_secret(params.get("key"), effective_salt),
-                api_version=params.get("version"),
-                extra_params=dict(params.get("extra_params") or {}),
-                timeout=float(timeout_raw) if timeout_raw is not None else None,
-                retry=_resolve_retry_policy(params),
-                fallback_to=params.get("fallback_to"),
-            )
-        )
+        model_list.extend(_build_model_configs(entry, effective_salt))
 
     if not model_list:
         raise ValueError("config has an empty 'models' list")

@@ -402,6 +402,27 @@ def test_chain_respects_max_length():
     assert len(chain) == _MAX_FALLBACK_CHAIN
 
 
+def test_chain_flattens_group_endpoints():
+    # 同一モデルの複数エンドポイントは全件フラット展開され、fallback 先も展開する。
+    a1 = ModelConfig("a", "azure", "da1", fallback_to="b")
+    a2 = ModelConfig("a", "azure", "da2", fallback_to="ignored")
+    b1 = ModelConfig("b", "azure", "db1")
+    b2 = ModelConfig("b", "azure", "db2")
+    chain = _resolve_fallback_chain(_router(a1, a2, b1, b2), "a")
+    assert [m.deployment for m in chain] == ["da1", "da2", "db1", "db2"]
+
+
+def test_chain_max_length_counts_models_not_endpoints():
+    # 上限はモデル連鎖長で判定する（同一モデルの複数エンドポイントは 1 とみなす）。
+    a1 = ModelConfig("a", "azure", "da1", fallback_to="b")
+    a2 = ModelConfig("a", "azure", "da2")
+    links = [("b", "c"), ("c", "d"), ("d", "e"), ("e", "f"), ("f", None)]
+    rest = [ModelConfig(n, "azure", "d" + n, fallback_to=nxt) for n, nxt in links]
+    chain = _resolve_fallback_chain(_router(a1, a2, *rest), "a")
+    # 5 モデル（a..e）まで辿り、a は 2 エンドポイントなので合計 6 エントリ。
+    assert [m.model_name for m in chain] == ["a", "a", "b", "c", "d", "e"]
+
+
 def test_server_falls_back_to_secondary_on_500(tmp_path, monkeypatch):
     # primary が 5xx → secondary へフェイルオーバーして 200 を返す（E2E）。
     monkeypatch.setenv("AZURE_API_KEY", AZURE_KEY)

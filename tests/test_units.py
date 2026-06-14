@@ -24,13 +24,39 @@ def test_router_exact_named_match():
         model_list=[_mc(model_name="claude-3", deployment="dep-a")],
         general_settings=GeneralSettings(),
     )
-    assert Router(cfg).resolve("claude-3").deployment == "dep-a"
+    assert Router(cfg).resolve("claude-3")[0].deployment == "dep-a"
 
 
 def test_router_raises_without_match_or_wildcard():
     cfg = Config(model_list=[_mc(model_name="only")], general_settings=GeneralSettings())
     with pytest.raises(KeyError):
         Router(cfg).resolve("missing")
+
+
+def test_router_groups_same_name_endpoints():
+    # 同一 model_name の複数エントリは 1 グループに集約され、resolve が全件返す。
+    cfg = Config(
+        model_list=[
+            _mc(model_name="claude-3", deployment="dep-a"),
+            _mc(model_name="claude-3", deployment="dep-b"),
+        ],
+        general_settings=GeneralSettings(),
+    )
+    group = Router(cfg).resolve("claude-3")
+    assert [mc.deployment for mc in group] == ["dep-a", "dep-b"]
+
+
+def test_router_groups_wildcard_endpoints():
+    # '*' キャッチオールも複数エントリをグループに集約する。
+    cfg = Config(
+        model_list=[
+            _mc(model_name="*", deployment="dep-a"),
+            _mc(model_name="*", deployment="dep-b"),
+        ],
+        general_settings=GeneralSettings(),
+    )
+    group = Router(cfg).resolve("anything")
+    assert [mc.deployment for mc in group] == ["dep-a", "dep-b"]
 
 
 # ---- config helpers ----

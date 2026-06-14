@@ -27,20 +27,23 @@ _MAX_FALLBACK_CHAIN = 5
 def _resolve_fallback_chain(router: Router, model_name: str) -> list[ModelConfig]:
     """``model_name`` を起点に ``fallback_to`` を辿って ModelConfig 連鎖を構築する。
 
-    先頭が primary、以降が fallback。``visited`` で循環を防ぎ、``_MAX_FALLBACK_CHAIN``
-    で長さを上限化する。起点の解決失敗（KeyError）は呼び出し元へ伝播させる。
+    各モデル名は複数エンドポイント（グループ）を持ちうるため、解決した
+    グループの全エンドポイントを順次フラット展開して連鎖へ追加する（現時点では
+    RR なし）。先頭が primary、以降が fallback。``visited`` は**モデル名**で
+    管理して循環を防ぎ、``_MAX_FALLBACK_CHAIN`` で**モデル連鎖長**を上限化する。
+    起点の解決失敗（KeyError）は呼び出し元へ伝播させる。
     """
     chain: list[ModelConfig] = []
     visited: set[str] = set()
-    mc = router.resolve(model_name)
+    group = router.resolve(model_name)
     while True:
-        chain.append(mc)
-        visited.add(mc.model_name)
-        nxt = mc.fallback_to
-        if not nxt or nxt in visited or len(chain) >= _MAX_FALLBACK_CHAIN:
+        chain.extend(group)
+        visited.add(group[0].model_name)
+        nxt = group[0].fallback_to
+        if not nxt or nxt in visited or len(visited) >= _MAX_FALLBACK_CHAIN:
             return chain
         try:
-            mc = router.resolve(nxt)
+            group = router.resolve(nxt)
         except KeyError:
             # 設定ミスの fallback_to は無視し、それまでの連鎖で続行する。
             logger.info("Fallback target %r not found; stopping chain", nxt)
